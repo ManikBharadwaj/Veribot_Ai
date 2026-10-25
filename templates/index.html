@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<!--
+  index.html - THE DASHBOARD (the page you see after logging in).
+
+  HOW THIS FILE IS ORGANISED
+  --------------------------
+    1. <head>      Tailwind CSS (from a CDN) and a few custom styles.
+    2. Sidebar     Navigation buttons (Overview / Upload / Talent Pool / DigiLocker).
+    3. Four "views" Four blocks of HTML. Only ONE is visible at a time.
+    4. The drawer  A panel that slides in from the right with a candidate's full scorecard.
+    5. <script>    All the JavaScript. It talks to main.py with fetch().
+
+  HOW DATA FLOWS
+  --------------
+    You click "Analyze"  ->  JavaScript collects the files  ->  fetch("/api/analyze")
+    ->  main.py + agent.py do the work  ->  JSON comes back  ->  JavaScript draws it.
+
+  SAFETY RULE FOR THIS FILE
+  -------------------------
+    Resume text is typed by strangers. NEVER put it into the page with innerHTML
+    unless it went through the esc() helper first. esc() turns "<" into "&lt;"
+    so a malicious resume cannot inject code into your dashboard.
+-->
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>VeriBot AI · Talent Verification</title>
+
+  <script nonce="{{ csp_nonce }}" src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script nonce="{{ csp_nonce }}">
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        fontFamily: { sans: ['Plus Jakarta Sans', 'Inter', 'ui-sans-serif', 'system-ui'], mono: ['JetBrains Mono', 'ui-monospace'] },
+        colors: { brand: { black: '#080A0F', surface: '#12151E', primary: '#2563EB' } }
+      } },
+    };
+  </script>
+
+  <style>
+    body {
+      background-color: #080A0F;
+      background-image: radial-gradient(#1e293b 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    .glass-surface {
+      background: rgba(18, 21, 30, .72);
+      backdrop-filter: blur(20px);
+      border-color: rgba(255, 255, 255, .08);
+    }
+
+    [class*="bg-slate-900"] {
+      background-color: rgba(18, 21, 30, .72) !important;
+      backdrop-filter: blur(20px);
+    }
+    [class*="bg-[#0B0F19]"] { background-color: rgba(8, 10, 15, .78) !important; }
+    [class*="border-slate-800"] { border-color: rgba(255, 255, 255, .09) !important; }
+    [class*="border-slate-700"] { border-color: rgba(255, 255, 255, .13) !important; }
+    [class*="text-indigo-"] { color: #60a5fa !important; }
+    [class*="text-violet-"] { color: #93c5fd !important; }
+    [class*="border-indigo-"] { border-color: rgba(37, 99, 235, .48) !important; }
+    [class*="hover:border-indigo-"]:hover { border-color: rgba(59, 130, 246, .65) !important; }
+    [class*="from-[#6366F1]"] {
+      --tw-gradient-from: #2563EB var(--tw-gradient-from-position) !important;
+      --tw-gradient-to: rgb(37 99 235 / 0) var(--tw-gradient-to-position) !important;
+    }
+    [class*="to-[#8B5CF6]"] { --tw-gradient-to: #3B82F6 var(--tw-gradient-to-position) !important; }
+
+    #drawer { background-color: #0c1019; }
+    #drawer > div:first-child { background-color: rgba(12, 16, 25, .95); }
+    aside { background-color: rgba(8, 10, 15, .94); backdrop-filter: blur(20px); }
+    main { max-width: 1600px; }
+    select, input:not([type="range"]):not([type="file"]) { color-scheme: dark; }
+
+    :root { --motion-ease: cubic-bezier(0.16, 1, 0.3, 1); }
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes ambientPulse {
+      0%, 100% { opacity: .55; transform: scale(.96); }
+      50% { opacity: 1; transform: scale(1.04); }
+    }
+    @keyframes drawerIn {
+      from { opacity: .75; transform: translateX(100%) scale(.985); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+    @keyframes buttonShimmer {
+      from { transform: translateX(-130%) skewX(-18deg); }
+      to { transform: translateX(240%) skewX(-18deg); }
+    }
+    @keyframes genieSuckOut {
+      0% { opacity: 1; transform: scale3d(1, 1, 1) skewX(0); clip-path: inset(0 round 24px); }
+      40% { opacity: .9; transform: scale3d(.22, .88, 1) skewX(-10deg); clip-path: inset(0 39% round 48%); }
+      100% { opacity: 0; transform: scale3d(.015, .02, 1) rotateX(16deg); clip-path: inset(48% 48% round 999px); }
+    }
+    @keyframes genieExpandIn {
+      0% { opacity: 0; transform: scale3d(.015, .02, 1) rotateX(-16deg); clip-path: inset(48% 48% round 999px); }
+      60% { opacity: .92; transform: scale3d(.22, .88, 1) skewX(8deg); clip-path: inset(0 39% round 48%); }
+      100% { opacity: 1; transform: scale3d(1, 1, 1) skewX(0); clip-path: inset(0 round 24px); }
+    }
+
+    main > header { animation: fadeInUp .7s var(--motion-ease) both; }
+    .view-stage {
+      position: relative;
+      perspective: 1000px;
+      transform-style: preserve-3d;
+    }
+    .view-stage > .view { transform-style: preserve-3d; }
+    .view.genie-suck-out, .view.genie-expand-in {
+      transform-origin: var(--genie-x, 50%) var(--genie-y, 50%);
+      backface-visibility: hidden;
+      will-change: transform, opacity, clip-path;
+    }
+    .view.genie-suck-out { animation: genieSuckOut 360ms var(--motion-ease) both; }
+    .view.genie-expand-in { animation: genieExpandIn 620ms var(--motion-ease) both; }
+    .view:not(.hidden) > * { animation: fadeInUp .65s var(--motion-ease) both; }
+    .view:not(.hidden) > :nth-child(2) { animation-delay: 100ms; }
+    .view:not(.hidden) > :nth-child(3) { animation-delay: 180ms; }
+    .view:not(.hidden) > :nth-child(4) { animation-delay: 260ms; }
+    .metric-grid > *, .bento-grid > * { animation: fadeInUp .6s var(--motion-ease) backwards; }
+    .metric-grid > :nth-child(1), .bento-grid > :nth-child(1) { animation-delay: 100ms; }
+    .metric-grid > :nth-child(2), .bento-grid > :nth-child(2) { animation-delay: 170ms; }
+    .metric-grid > :nth-child(3), .bento-grid > :nth-child(3) { animation-delay: 240ms; }
+    .metric-grid > :nth-child(4), .bento-grid > :nth-child(4) { animation-delay: 310ms; }
+    .motion-card {
+      transition: transform .35s var(--motion-ease), border-color .35s var(--motion-ease), box-shadow .35s var(--motion-ease);
+    }
+    .motion-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(59, 130, 246, .55) !important;
+      box-shadow: 0 0 25px rgba(37, 99, 235, .18);
+    }
+    button, a, select, input, .lift, #drawer, #overlay {
+      transition-timing-function: var(--motion-ease) !important;
+    }
+    button { transform-origin: center; }
+    button:active { transform: scale(.97); }
+    button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 2px solid rgba(59, 130, 246, .75);
+      outline-offset: 3px;
+    }
+    .primary-cta {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      background-image: linear-gradient(105deg, #2563EB 0%, #4F46E5 50%, #2563EB 100%);
+      background-size: 200% auto;
+      transition: background-position .5s var(--motion-ease), box-shadow .35s var(--motion-ease), transform .35s var(--motion-ease);
+    }
+    .primary-cta::after {
+      position: absolute;
+      z-index: -1;
+      top: -50%;
+      bottom: -50%;
+      left: 0;
+      width: 34%;
+      content: "";
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .3), transparent);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .primary-cta:hover { background-position: right center; }
+    .primary-cta:hover::after { opacity: 1; animation: buttonShimmer .8s var(--motion-ease) both; }
+    .ambient-aura {
+      position: absolute;
+      z-index: -1;
+      top: -3.5rem;
+      right: 5%;
+      width: 18rem;
+      height: 12rem;
+      border-radius: 9999px;
+      background: rgba(37, 99, 235, .12);
+      filter: blur(64px);
+      pointer-events: none;
+      animation: ambientPulse 10s ease-in-out infinite;
+    }
+    tbody tr {
+      transition: background-color .2s var(--motion-ease), box-shadow .2s var(--motion-ease);
+      border-left: 2px solid transparent;
+    }
+    tbody tr:hover {
+      border-left-color: #3B82F6;
+      background-color: rgba(59, 130, 246, .06);
+      box-shadow: inset 2px 0 #3B82F6;
+    }
+    tbody tr:nth-child(1) { animation: fadeInUp .45s var(--motion-ease) 80ms both; }
+    tbody tr:nth-child(2) { animation: fadeInUp .45s var(--motion-ease) 140ms both; }
+    tbody tr:nth-child(3) { animation: fadeInUp .45s var(--motion-ease) 200ms both; }
+    tbody tr:nth-child(4) { animation: fadeInUp .45s var(--motion-ease) 260ms both; }
+    tbody tr:nth-child(n+5) { animation: fadeInUp .45s var(--motion-ease) 320ms both; }
+
+    /* Shimmering placeholder shown while the analysis is running. */
+    @keyframes shimmer { 100% { transform: translateX(100%); } }
+    .skeleton { position: relative; overflow: hidden; background: rgba(30,41,59,.7); border-radius: 10px; }
+    .skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(99,102,241,.18), transparent); animation: shimmer 1.4s var(--motion-ease) infinite; }
+
+    /* The right-hand drawer slides in using a transform. */
+    #drawer { transform: translateX(100%); transition: transform .45s var(--motion-ease); }
+    #drawer.open { transform: translateX(0); animation: drawerIn .45s var(--motion-ease) both; }
+    #overlay { opacity: 0; pointer-events: none; transition: opacity .35s var(--motion-ease); }
+    #overlay.open { opacity: 1; pointer-events: auto; }
+
+    /* Cards rise a little when the mouse is over them. */
+    .lift { transition: transform .2s var(--motion-ease), border-color .2s var(--motion-ease), box-shadow .2s var(--motion-ease); }
+    .lift:hover {
+      transform: translateY(-2px);
+      border-color: rgba(59, 130, 246, .5) !important;
+      box-shadow: 0 12px 34px rgba(37, 99, 235, .08);
+    }
+
+    .persona-pill { transition: transform .18s var(--motion-ease), border-color .18s var(--motion-ease), background .18s var(--motion-ease), box-shadow .18s var(--motion-ease); }
+    .persona-pill:hover { transform: scale(1.01); border-color: rgba(59, 130, 246, .55); }
+    .persona-pill:active { transform: scale(.99); }
+    .persona-pill:focus { box-shadow: 0 0 0 4px rgba(37, 99, 235, .12); }
+
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .fade-up { animation: fadeUp .4s var(--motion-ease) both; }
+
+    /* Thin dark scrollbars */
+    * { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+      .view.genie-suck-out, .view.genie-expand-in { animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+
+<body class="font-sans text-slate-300 antialiased">
+
+<!-- =====================================================================
+     SIDEBAR  (fixed on the left on computers, a top bar on phones)
+     Each button has data-view="..." which tells the JavaScript which view to show.
+     ===================================================================== -->
+<aside class="hidden md:flex fixed inset-y-0 left-0 w-64 flex-col border-r border-slate-800 bg-[#0B0F19] z-30">
+  <div class="h-16 flex items-center gap-3 px-6 border-b border-slate-800">
+    <div class="h-8 w-8 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-lg shadow-indigo-500/30">
+      <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M12 2.25 4.5 5.25v6c0 4.5 3.2 8.4 7.5 9.75 4.3-1.35 7.5-5.25 7.5-9.75v-6L12 2.25Z"/></svg>
+    </div>
+    <span class="text-[15px] font-semibold text-slate-100 tracking-tight">VeriBot <span class="text-slate-500 font-medium">AI</span></span>
+  </div>
+
+  <nav class="flex-1 p-4 space-y-1 text-sm">
+    <button data-view="overview" class="nav-btn w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors">
+      <span class="text-base">▦</span> Overview
+    </button>
+    <button data-view="upload" class="nav-btn w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors">
+      <span class="text-base">⇪</span> Upload &amp; Analyze
+    </button>
+    <button data-view="pool" class="nav-btn w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors">
+      <span class="text-base">☰</span> Talent Pool
+    </button>
+    <button data-view="docs" class="nav-btn w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors">
+      <span class="text-base">✔</span> DigiLocker (Simulated)
+    </button>
+  </nav>
+
+  <!-- Who is logged in + logout. {{ user.name }} is filled in by the server. -->
+  <div class="p-4 border-t border-slate-800">
+    <p class="text-sm font-medium text-slate-100 truncate">{{ user.name }}</p>
+    <p class="text-xs text-slate-500 truncate">{{ user.email }}</p>
+    <p class="mt-1 inline-block rounded-full border border-slate-700 px-2 py-0.5 text-[11px] uppercase tracking-wider text-slate-400">{{ user.role }}</p>
+    <form method="post" action="/logout" class="mt-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="w-full rounded-lg border border-slate-800 py-2 text-xs text-slate-400 hover:text-slate-100 hover:border-slate-700 transition-colors">Log out</button>
+    </form>
+  </div>
+</aside>
+
+<!-- Phone navigation bar -->
+<div class="md:hidden sticky top-0 z-30 border-b border-slate-800 bg-[#0B0F19]/95 backdrop-blur px-3 py-2 flex items-center gap-2 overflow-x-auto text-xs">
+  <button data-view="overview" class="nav-btn rounded-lg px-3 py-2 whitespace-nowrap">Overview</button>
+  <button data-view="upload" class="nav-btn rounded-lg px-3 py-2 whitespace-nowrap">Upload</button>
+  <button data-view="pool" class="nav-btn rounded-lg px-3 py-2 whitespace-nowrap">Talent Pool</button>
+  <button data-view="docs" class="nav-btn rounded-lg px-3 py-2 whitespace-nowrap">DigiLocker</button>
+  <form method="post" action="/logout" class="ml-auto"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="rounded-lg border border-slate-800 px-3 py-2 text-slate-400">Log out</button></form>
+</div>
+
+<!-- =====================================================================
+     MAIN AREA
+     ===================================================================== -->
+<main class="md:ml-64 min-h-screen p-5 md:p-8 max-w-[1400px]">
+
+  <header class="mb-7 flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] pb-5">
+    <div class="flex items-center gap-3">
+      <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10 text-blue-400">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M12 2.25 4.5 5.25v6c0 4.5 3.2 8.4 7.5 9.75 4.3-1.35 7.5-5.25 7.5-9.75v-6L12 2.25Z"/></svg>
+      </div>
+      <div>
+        <p class="text-[10px] font-mono uppercase tracking-[.2em] text-blue-400">VeriBot AI · Talent intelligence</p>
+        <p class="mt-0.5 text-sm font-semibold text-white">Verification workspace</p>
+      </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/[0.06] px-3 py-1.5 text-xs text-slate-300">
+        <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-50"></span><span class="relative h-2 w-2 rounded-full bg-emerald-500"></span></span>
+        Session active
+      </span>
+      <button data-show-view="upload" class="primary-cta rounded-xl px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-900/30">New analysis <span aria-hidden="true">↗</span></button>
+    </div>
+  </header>
+
+  <!-- Error / info banner used by every view -->
+  <div id="banner" class="hidden mb-5 rounded-lg border px-4 py-3 text-sm"></div>
+
+  <div id="view-stage" class="view-stage">
+  <!-- ===================== VIEW 1: OVERVIEW ===================== -->
+  <section id="view-overview" class="view hidden">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-6">
+      <div class="relative isolate">
+        <span class="ambient-aura" aria-hidden="true"></span>
+        <p class="mb-2 text-[10px] font-mono uppercase tracking-[.22em] text-blue-400">Evidence-led talent review</p>
+        <h1 class="text-3xl font-bold tracking-tight text-white">Overview</h1>
+        <p class="text-sm text-slate-400 mt-1">A summary of every candidate you have analysed.</p>
+      </div>
+      <button data-show-view="upload" class="primary-cta rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/45">+ Analyze resumes</button>
+    </div>
+
+    <!-- The four statistics cards. The JavaScript fills in the numbers. -->
+    <div class="metric-grid grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div class="lift motion-card rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-500">Candidates analysed</p>
+        <p id="stat-total" class="mt-2 text-3xl font-semibold text-slate-50 tabular-nums">–</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-500">Average trust score</p>
+        <p id="stat-trust" class="mt-2 text-3xl font-semibold text-emerald-400 tabular-nums">–</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-500">Average ATS score</p>
+        <p id="stat-ats" class="mt-2 text-3xl font-semibold text-indigo-300 tabular-nums">–</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-500">Documents verified</p>
+        <p id="stat-docs" class="mt-2 text-3xl font-semibold text-violet-300 tabular-nums">–</p>
+      </div>
+    </div>
+
+    <div class="bento-grid mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="lift motion-card rounded-2xl border border-white/[0.08] bg-[#12151E]/70 p-4">
+        <p class="text-[10px] font-mono uppercase tracking-[.18em] text-blue-400">01 · ATS intelligence</p>
+        <p class="mt-2 text-sm font-semibold text-slate-100">Role-aligned resume signals</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">Structured scoring surfaces relevant experience and skills.</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-white/[0.08] bg-[#12151E]/70 p-4">
+        <p class="text-[10px] font-mono uppercase tracking-[.18em] text-blue-400">02 · Evidence review</p>
+        <p class="mt-2 text-sm font-semibold text-slate-100">Claims checked against signals</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">GitHub and professional profile links add review context.</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-white/[0.08] bg-[#12151E]/70 p-4">
+        <p class="text-[10px] font-mono uppercase tracking-[.18em] text-blue-400">03 · Document telemetry</p>
+        <p class="mt-2 text-sm font-semibold text-slate-100">OCR-assisted comparisons</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">Uploaded records are compared with resume details.</p>
+      </div>
+      <div class="lift motion-card rounded-2xl border border-white/[0.08] bg-[#12151E]/70 p-4">
+        <p class="text-[10px] font-mono uppercase tracking-[.18em] text-blue-400">04 · Explainable review</p>
+        <p class="mt-2 text-sm font-semibold text-slate-100">Scores with review flags</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">Keep decision context visible for every candidate.</p>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-4 mt-4">
+      <!-- Verdict breakdown: simple coloured bars -->
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <h2 class="text-sm font-semibold text-slate-100 mb-4">Verdict breakdown</h2>
+        <div id="verdict-bars" class="space-y-4"></div>
+      </div>
+
+      <!-- Most recent candidates -->
+      <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-slate-100">Recently analysed</h2>
+          <button data-show-view="pool" class="text-xs text-indigo-400 hover:text-indigo-300">View all →</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-left text-xs uppercase tracking-wider text-slate-500">
+              <tr><th class="py-2 pr-3 font-medium">Candidate</th><th class="py-2 pr-3 font-medium">Role</th><th class="py-2 pr-3 font-medium">Trust</th><th class="py-2 font-medium">Verdict</th></tr>
+            </thead>
+            <tbody id="recent-body" class="divide-y divide-slate-800/70"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Which optional features are switched on (set by the server from .env) -->
+    <div class="mt-4 rounded-2xl border border-slate-800 bg-slate-900/30 p-5 text-xs text-slate-400 flex flex-wrap gap-x-8 gap-y-2">
+      <span><span class="inline-block h-2 w-2 rounded-full {% if github_token_set %}bg-emerald-400{% else %}bg-amber-400{% endif %} mr-2"></span>GitHub token: {% if github_token_set %}set{% else %}not set (limit 60 requests/hour){% endif %}</span>
+      <span><span class="inline-block h-2 w-2 rounded-full {% if llm_enabled %}bg-emerald-400{% else %}bg-slate-500{% endif %} mr-2"></span>AI summary: {% if llm_enabled %}on{% else %}off (rules only){% endif %}</span>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+      <span class="mr-2 text-[10px] font-mono uppercase tracking-[.18em] text-slate-500">Workflow stack</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">GitHub</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">LinkedIn</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">DigiLocker OCR · simulated</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">PDF engine</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">Supabase</span>
+      <span class="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-400">Upstash Redis</span>
+    </div>
+  </section>
+
+  <!-- ===================== VIEW 2: UPLOAD & ANALYZE ===================== -->
+  <section id="view-upload" class="view hidden">
+    <h1 class="text-2xl font-semibold text-slate-50">Upload &amp; Analyze</h1>
+    <p class="text-sm text-slate-400 mt-1 mb-6">Drop a batch of resume PDFs. Links to GitHub and LinkedIn are found automatically.</p>
+
+    <div class="grid lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 space-y-4">
+
+        <!-- Step 1: choose the job role -->
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400 mb-2">1 · Role persona</p>
+          <select id="role-select" data-change-action="role-hint"
+                  class="persona-pill w-full rounded-xl border border-slate-800 bg-[#0B0F19] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/60 focus:ring-4 focus:ring-indigo-500/10"></select>
+          <p id="role-hint" class="mt-2 text-xs text-slate-500"></p>
+        </div>
+
+        <!-- Step 2: resumes dropzone -->
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400 mb-2">2 · Resume PDFs <span class="normal-case text-slate-600">(up to 2,000, max 8 MB each; 128 MB combined)</span></p>
+          <div id="drop-resumes" class="cursor-pointer rounded-xl border-2 border-dashed border-slate-700 hover:border-indigo-500/60 bg-[#0B0F19]/60 px-6 py-8 text-center transition-colors">
+            <p class="text-sm text-slate-300">Drag &amp; drop resume PDFs here, or <span class="text-indigo-400">browse</span></p>
+            <p class="text-xs text-slate-600 mt-1">PDF only</p>
+          </div>
+          <input id="input-resumes" type="file" accept=".pdf,application/pdf" multiple class="hidden" />
+          <ul id="list-resumes" class="mt-3 space-y-1.5 text-sm"></ul>
+        </div>
+
+        <!-- Step 3: documents dropzone -->
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400 mb-2">3 · Marksheets / ID documents <span class="normal-case text-slate-600">(optional · PDF, PNG or JPG)</span></p>
+          <div id="drop-documents" class="cursor-pointer rounded-xl border-2 border-dashed border-slate-700 hover:border-violet-500/60 bg-[#0B0F19]/60 px-6 py-8 text-center transition-colors">
+            <p class="text-sm text-slate-300">Drag &amp; drop documents here, or <span class="text-violet-400">browse</span></p>
+            <p class="text-xs text-slate-600 mt-1">Each document is matched to a resume by roll number, name or file name</p>
+          </div>
+          <input id="input-documents" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" multiple class="hidden" />
+          <ul id="list-documents" class="mt-3 space-y-1.5 text-sm"></ul>
+        </div>
+
+        <button id="analyze-btn" data-action="analyze"
+                class="primary-cta w-full rounded-xl py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 disabled:opacity-60 disabled:cursor-not-allowed">
+          Run verification
+        </button>
+      </div>
+
+      <!-- Right column: how it works + results of the last run -->
+      <div class="space-y-4">
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+          <h2 class="text-sm font-semibold text-slate-100 mb-3">What happens next</h2>
+          <ol class="space-y-2.5 text-sm text-slate-400 list-decimal list-inside">
+            <li>Text is read from every PDF.</li>
+            <li>GitHub and LinkedIn links are extracted.</li>
+            <li>Tech roles: GitHub code is checked. Other roles: certificates and results are checked.</li>
+            <li>Documents are read with OCR and compared with the resume.</li>
+            <li>Four scores and a list of flags are produced.</li>
+          </ol>
+        </div>
+
+        <!-- Shimmer placeholders while the server works -->
+        <div id="upload-loading" class="hidden rounded-2xl border border-slate-800 bg-slate-900/50 p-5 space-y-3">
+          <div class="flex items-center gap-2">
+            <span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span></span>
+            <p class="text-sm text-slate-300 font-mono">Agent running…</p>
+          </div>
+          <div class="skeleton h-4 w-2/3"></div><div class="skeleton h-12 w-full"></div><div class="skeleton h-12 w-full"></div>
+          <p class="text-xs text-slate-500">Large batches can take a minute because GitHub is checked for each candidate.</p>
+        </div>
+
+        <div id="upload-results" class="hidden rounded-2xl border border-slate-800 bg-slate-900/50 p-5"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== VIEW 3: TALENT POOL ===================== -->
+  <section id="view-pool" class="view hidden">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-6">
+      <div>
+        <h1 class="text-2xl font-semibold text-slate-50">Talent Pool</h1>
+        <p class="text-sm text-slate-400 mt-1">Filter the pool, then export exactly what you see as a CSV file.</p>
+      </div>
+      <button data-action="export-csv" class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20 transition-colors">⬇ Export CSV</button>
+    </div>
+
+    <!-- Filters: any change reloads the table -->
+    <div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-4 mb-4 grid sm:grid-cols-2 xl:grid-cols-5 gap-3">
+      <input id="f-search" data-input-action="search" placeholder="Search name or email…"
+             class="rounded-xl border border-slate-800 bg-[#0B0F19] px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500/60" />
+      <select id="f-role" data-change-action="load-pool" class="rounded-xl border border-slate-800 bg-[#0B0F19] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/60"></select>
+      <select id="f-verdict" data-change-action="load-pool" class="rounded-xl border border-slate-800 bg-[#0B0F19] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/60">
+        <option value="">Any verdict</option><option>Verified</option><option>Needs Review</option><option>High Risk</option>
+      </select>
+      <select id="f-doc" data-change-action="load-pool" class="rounded-xl border border-slate-800 bg-[#0B0F19] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/60">
+        <option value="">Any document status</option><option value="verified">Document verified</option><option value="partial">Document partial</option>
+        <option value="mismatch">Document mismatch</option><option value="unreadable">Document unreadable</option><option value="none">No document</option>
+      </select>
+      <label class="flex items-center gap-3 rounded-xl border border-slate-800 bg-[#0B0F19] px-3 py-2 text-sm">
+        <span class="text-slate-400 whitespace-nowrap">Min trust <span id="f-trust-label" class="text-slate-100 tabular-nums">0</span></span>
+        <input id="f-trust" type="range" min="0" max="100" step="5" value="0" class="w-full accent-indigo-500"
+               data-input-action="trust" />
+      </label>
+    </div>
+
+    <div class="rounded-2xl border border-slate-800 bg-slate-900/50 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-800">
+          <tr>
+            <th class="py-3 pl-5 pr-3 font-medium">Candidate</th>
+            <th class="py-3 pr-3 font-medium">Role</th>
+            <th class="py-3 pr-3 font-medium">ATS</th>
+            <th class="py-3 pr-3 font-medium">Trust</th>
+            <th class="py-3 pr-3 font-medium">Fit</th>
+            <th class="py-3 pr-3 font-medium">Flags</th>
+            <th class="py-3 pr-3 font-medium">Document</th>
+            <th class="py-3 pr-5 font-medium">Verdict</th>
+          </tr>
+        </thead>
+        <tbody id="pool-body" class="divide-y divide-slate-800/70"></tbody>
+      </table>
+      <p id="pool-empty" class="hidden py-14 text-center text-sm text-slate-500">No candidates match these filters.</p>
+    </div>
+    <p id="pool-count" class="mt-3 text-xs text-slate-500"></p>
+  </section>
+
+  <!-- ===================== VIEW 4: SIMULATED DIGILOCKER ===================== -->
+  <section id="view-docs" class="view hidden">
+    <h1 class="text-2xl font-semibold text-slate-50">Simulated DigiLocker / Govt ID Authenticator</h1>
+
+    <!-- This banner is intentionally loud: nobody should mistake this for the real thing. -->
+    <div class="mt-3 mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100/90">
+      <p class="font-semibold text-amber-300">SIMULATION ONLY</p>
+      <p class="mt-1">This module is <b>not connected to the real DigiLocker</b> or any government service. It reads the uploaded document with OCR, checks that it has the usual structure of an academic record, and compares name, roll number, CGPA and university with the resume. A "passed" result does <b>not</b> prove a document is genuine. Real verification needs the official issuer / DigiLocker partner APIs.</p>
+    </div>
+
+    <div class="rounded-2xl border border-slate-800 bg-slate-900/50 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-800">
+          <tr><th class="py-3 pl-5 pr-3 font-medium">Candidate</th><th class="py-3 pr-3 font-medium">Documents</th><th class="py-3 pr-3 font-medium">Details match</th><th class="py-3 pr-5 font-medium">Simulated authenticator</th></tr>
+        </thead>
+        <tbody id="docs-body" class="divide-y divide-slate-800/70"></tbody>
+      </table>
+      <p id="docs-empty" class="hidden py-14 text-center text-sm text-slate-500">No documents have been uploaded yet. Add marksheets on the Upload page.</p>
+    </div>
+  </section>
+  </div>
+</main>
+
+<!-- =====================================================================
+     THE DRAWER: a candidate's full scorecard
+     ===================================================================== -->
+<div id="overlay" data-action="close-drawer" class="fixed inset-0 bg-black/60 z-40"></div>
+<div id="drawer" class="fixed inset-y-0 right-0 z-50 w-full max-w-3xl overflow-y-auto border-l border-slate-800 bg-[#0D1220] shadow-2xl">
+  <div class="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-[#0D1220]/95 backdrop-blur px-6 py-4">
+    <h2 class="text-sm font-semibold text-slate-100">Candidate scorecard</h2>
+    <button data-action="close-drawer" class="rounded-lg border border-slate-800 px-3 py-1 text-xs text-slate-400 hover:text-slate-100">Close ✕</button>
+  </div>
+  <div id="drawer-body" class="p-6 space-y-5"></div>
+</div>
+
+
+<script nonce="{{ csp_nonce }}">
+/* ==========================================================================
+   JAVASCRIPT - read top to bottom. Each function has a comment saying what it does.
+   ========================================================================== */
+
+// ---------- Page "memory": the variables the page keeps track of ----------
+var state = {
+  roles: [],            // job roles loaded from the server
+  resumes: [],          // resume files chosen but not yet uploaded
+  documents: [],        // marksheet / ID files chosen but not yet uploaded
+  currentView: 'overview',
+  // The server (Jinja2) writes true or false here, so JavaScript knows if you may delete:
+  isOfficer: {{ 'true' if user.role == 'officer' else 'false' }}
+};
+
+var searchTimer = null;   // used to wait a moment while you are still typing
+
+
+// ==========================================================================
+// SMALL HELPERS
+// ==========================================================================
+
+// esc() makes text safe to place inside HTML. ALWAYS use it on anything that
+// came from a resume, a document or the database. (See the safety rule at the top.)
+function esc(value) {
+  if (value === null || value === undefined) { return ''; }
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Only allow normal web links (http / https) in href="". Blocks "javascript:" links.
+function safeUrl(url) {
+  if (/^https?:\/\//i.test(String(url))) { return esc(url); }
+  return '#';
+}
+
+// Short shortcut for document.getElementById.
+function byId(id) { return document.getElementById(id); }
+
+// api() = talk to main.py. It sends a request and returns the JSON answer.
+// If the answer is an error, it throws one, so the caller can show a message.
+async function api(url, options) {
+  var requestOptions = Object.assign({}, options || {});
+  var method = String(requestOptions.method || 'GET').toUpperCase();
+  if (method === 'POST' || method === 'DELETE') {
+    requestOptions.headers = Object.assign({}, requestOptions.headers || {}, {
+      'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content
+    });
+  }
+  var response = await fetch(url, requestOptions);
+
+  // 401 means "you are not logged in (any more)" -> go to the login page.
+  if (response.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Please log in.');
+  }
+
+  var text = await response.text();
+  var data = null;
+  try { data = JSON.parse(text); } catch (e) { data = null; }
+
+  if (!response.ok) {
+    var message = 'Something went wrong (status ' + response.status + ').';
+    if (data && typeof data.detail === 'string') { message = data.detail; }
+    throw new Error(message);
+  }
+  return data;
+}
+
+// Show a coloured message at the top of the page. kind = 'error' | 'info' | 'success'
+function showBanner(message, kind) {
+  var banner = byId('banner');
+  var colours = {
+    error:   'border-rose-500/30 bg-rose-500/10 text-rose-300',
+    info:    'border-indigo-500/30 bg-indigo-500/10 text-indigo-200',
+    success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+  };
+  banner.className = 'mb-5 rounded-lg border px-4 py-3 text-sm ' + colours[kind || 'info'];
+  banner.textContent = message;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function hideBanner() { byId('banner').className = 'hidden'; }
+
+// Pick a text colour from a 0-100 score.
+function scoreTextClass(score) {
+  if (score >= 70) { return 'text-emerald-400'; }
+  if (score >= 40) { return 'text-amber-400'; }
+  return 'text-rose-400';
+}
+function scoreBarClass(score) {
+  if (score >= 70) { return 'bg-emerald-500'; }
+  if (score >= 40) { return 'bg-amber-500'; }
+  return 'bg-rose-500';
+}
+
+// A number with a small coloured bar under it (used in tables).
+function scoreCell(score) {
+  return '<div class="w-16">' +
+    '<span class="font-semibold tabular-nums ' + scoreTextClass(score) + '">' + Number(score) + '</span>' +
+    '<div class="mt-1 h-1 rounded-full bg-slate-800"><div class="h-1 rounded-full ' + scoreBarClass(score) + '" style="width:' + Number(score) + '%"></div></div>' +
+    '</div>';
+}
+
+// The coloured pill for a verdict.
+function verdictBadge(verdict) {
+  var classes = {
+    'Verified':     'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    'Needs Review': 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    'High Risk':    'border-rose-500/30 bg-rose-500/10 text-rose-300'
+  };
+  return '<span class="inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ' +
+    (classes[verdict] || 'border-slate-700 text-slate-400') + '">' + esc(verdict) + '</span>';
+}
+
+// The coloured pill for a document status.
+function docBadge(status) {
+  var labels = { none: 'No document', verified: 'Verified', partial: 'Partial match', mismatch: 'Mismatch', unreadable: 'Unreadable' };
+  var classes = {
+    none:       'border-slate-700 text-slate-500',
+    verified:   'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    partial:    'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    mismatch:   'border-rose-500/30 bg-rose-500/10 text-rose-300',
+    unreadable: 'border-slate-600 bg-slate-700/30 text-slate-300'
+  };
+  return '<span class="inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ' +
+    (classes[status] || classes.none) + '">' + esc(labels[status] || status) + '</span>';
+}
+
+// Small round gauge used in the scorecard. value = 0-100.
+function ring(value, label) {
+  var radius = 38;
+  var circumference = 2 * Math.PI * radius;
+  var offset = circumference - (circumference * value / 100);
+  return '<div class="flex flex-col items-center">' +
+    '<div class="relative h-24 w-24">' +
+      '<svg class="h-24 w-24 -rotate-90" viewBox="0 0 100 100">' +
+        '<circle cx="50" cy="50" r="' + radius + '" fill="none" stroke="#1E293B" stroke-width="9"></circle>' +
+        '<circle cx="50" cy="50" r="' + radius + '" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" ' +
+          'class="' + scoreTextClass(value) + '" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '"></circle>' +
+      '</svg>' +
+      '<div class="absolute inset-0 flex items-center justify-center text-xl font-semibold text-slate-50 tabular-nums">' + Number(value) + '</div>' +
+    '</div>' +
+    '<p class="mt-2 text-xs uppercase tracking-wider text-slate-400">' + esc(label) + '</p>' +
+  '</div>';
+}
+
+
+// ==========================================================================
+// NAVIGATION - switching between the four views
+// ==========================================================================
+
+var viewTransitionId = 0;
+var viewTransitionTimer = null;
+
+function showView(name, targetTab) {
+  hideBanner();
+  var nextView = byId('view-' + name);
+  if (!nextView) { return; }
+
+  viewTransitionId++;
+  var transitionId = viewTransitionId;
+  if (viewTransitionTimer !== null) {
+    window.clearTimeout(viewTransitionTimer);
+    viewTransitionTimer = null;
+  }
+
+  var activeView = document.querySelector('.view:not(.hidden)');
+  var shouldAnimate = activeView && activeView !== nextView && targetTab &&
+    !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var views = document.querySelectorAll('.view');
+  for (var i = 0; i < views.length; i++) {
+    views[i].classList.remove('genie-suck-out', 'genie-expand-in');
+  }
+
+  if (shouldAnimate) {
+    var targetRect = targetTab.getBoundingClientRect();
+    var sourceRect = activeView.getBoundingClientRect();
+    var originX = targetRect.left + targetRect.width / 2;
+    var originY = targetRect.top + targetRect.height / 2;
+
+    activeView.style.setProperty('--genie-x', (originX - sourceRect.left) + 'px');
+    activeView.style.setProperty('--genie-y', (originY - sourceRect.top) + 'px');
+
+    void activeView.offsetWidth;
+    activeView.classList.add('genie-suck-out');
+    var finishOutgoing = function (event) {
+      if (event && event.target !== activeView) { return; }
+      if (transitionId !== viewTransitionId) { return; }
+      if (viewTransitionTimer !== null) {
+        window.clearTimeout(viewTransitionTimer);
+        viewTransitionTimer = null;
+      }
+      activeView.classList.add('hidden');
+      activeView.classList.remove('genie-suck-out');
+      nextView.classList.remove('hidden');
+      var incomingRect = nextView.getBoundingClientRect();
+      nextView.style.setProperty('--genie-x', (originX - incomingRect.left) + 'px');
+      nextView.style.setProperty('--genie-y', (originY - incomingRect.top) + 'px');
+      nextView.classList.add('genie-expand-in');
+      var finishIncoming = function (animationEvent) {
+        if (animationEvent.target !== nextView) { return; }
+        nextView.removeEventListener('animationend', finishIncoming);
+        if (transitionId === viewTransitionId) { nextView.classList.remove('genie-expand-in'); }
+      };
+      nextView.addEventListener('animationend', finishIncoming);
+    };
+    activeView.addEventListener('animationend', finishOutgoing, { once: true });
+    viewTransitionTimer = window.setTimeout(finishOutgoing, 400);
+  } else {
+    for (var j = 0; j < views.length; j++) {
+      views[j].classList.add('hidden');
+    }
+    nextView.classList.remove('hidden');
+  }
+
+  state.currentView = name;
+
+  // Highlight the active navigation button.
+  var buttons = document.querySelectorAll('.nav-btn');
+  for (var k = 0; k < buttons.length; k++) {
+    var isActive = buttons[k].getAttribute('data-view') === name;
+    buttons[k].classList.toggle('bg-indigo-500/10', isActive);
+    buttons[k].classList.toggle('text-indigo-300', isActive);
+    buttons[k].classList.toggle('text-slate-400', !isActive);
+  }
+
+  // Load the data this view needs.
+  if (name === 'overview') { loadOverview(); }
+  if (name === 'pool') { loadPool(); }
+  if (name === 'docs') { loadDocsView(); }
+}
+
+
+// ==========================================================================
+// OVERVIEW VIEW
+// ==========================================================================
+
+async function loadOverview() {
+  try {
+    var stats = await api('/api/stats');
+    byId('stat-total').textContent = stats.total;
+    byId('stat-trust').textContent = stats.total ? stats.avg_trust : '–';
+    byId('stat-ats').textContent = stats.total ? stats.avg_ats : '–';
+    byId('stat-docs').textContent = stats.documents_verified;
+
+    // Verdict bars
+    var bars = [
+      ['Verified', 'bg-emerald-500'],
+      ['Needs Review', 'bg-amber-500'],
+      ['High Risk', 'bg-rose-500']
+    ];
+    var html = '';
+    for (var i = 0; i < bars.length; i++) {
+      var count = stats.verdicts[bars[i][0]];
+      var percent = stats.total ? Math.round(count * 100 / stats.total) : 0;
+      html += '<div>' +
+        '<div class="flex justify-between text-sm mb-1.5"><span class="text-slate-300">' + bars[i][0] + '</span><span class="text-slate-500 tabular-nums">' + count + '</span></div>' +
+        '<div class="h-2 rounded-full bg-slate-800"><div class="h-2 rounded-full ' + bars[i][1] + ' transition-all duration-500" style="width:' + percent + '%"></div></div>' +
+      '</div>';
+    }
+    byId('verdict-bars').innerHTML = html;
+
+    // Recent candidates (first 5 of the list)
+    var rows = await api('/api/candidates');
+    var recent = '';
+    for (var k = 0; k < rows.length && k < 5; k++) {
+      var c = rows[k];
+      recent += '<tr class="cursor-pointer hover:bg-slate-800/40 transition-colors" data-candidate-id="' + Number(c.id) + '">' +
+        '<td class="py-3 pr-3 text-slate-100">' + esc(c.name) + '</td>' +
+        '<td class="py-3 pr-3 text-slate-400">' + esc(c.role_label) + '</td>' +
+        '<td class="py-3 pr-3">' + scoreCell(c.trust) + '</td>' +
+        '<td class="py-3">' + verdictBadge(c.verdict) + '</td></tr>';
+    }
+    if (!recent) {
+      recent = '<tr><td colspan="4" class="py-8 text-center text-slate-500">Nothing here yet. Upload some resumes to get started.</td></tr>';
+    }
+    byId('recent-body').innerHTML = recent;
+  } catch (error) {
+    showBanner(error.message, 'error');
+  }
+}
+
+
+// ==========================================================================
+// UPLOAD VIEW - roles, dropzones, running the analysis
+// ==========================================================================
+
+// Ask the server for the list of job roles and fill both dropdowns.
+async function loadRoles() {
+  state.roles = await api('/api/roles');
+
+  var uploadOptions = '';
+  var filterOptions = '<option value="">Any role</option>';
+  for (var i = 0; i < state.roles.length; i++) {
+    var role = state.roles[i];
+    uploadOptions += '<option value="' + esc(role.key) + '">' + esc(role.label) + '</option>';
+    filterOptions += '<option value="' + esc(role.key) + '">' + esc(role.label) + '</option>';
+  }
+  byId('role-select').innerHTML = uploadOptions;
+  byId('f-role').innerHTML = filterOptions;
+  updateRoleHint();
+}
+
+// Under the dropdown, explain how the chosen role will be verified.
+function updateRoleHint() {
+  var key = byId('role-select').value;
+  var hint = '';
+  for (var i = 0; i < state.roles.length; i++) {
+    if (state.roles[i].key === key) {
+      if (state.roles[i].kind === 'tech') {
+        hint = 'Technical role: VeriBot checks GitHub repositories, languages, activity and commit history against the resume.';
+      } else {
+        hint = 'Non-technical role: VeriBot checks certificates, measurable results, LinkedIn link and domain keywords. (LinkedIn pages cannot be opened automatically.)';
+      }
+    }
+  }
+  byId('role-hint').textContent = hint;
+}
+
+// Make a box accept dropped files AND clicks. 'kind' is 'resumes' or 'documents'.
+function setupDropzone(kind, allowedExtensions) {
+  var zone = byId('drop-' + kind);
+  var input = byId('input-' + kind);
+
+  zone.addEventListener('click', function () { input.click(); });
+  input.addEventListener('change', function () { addFiles(kind, input.files, allowedExtensions); input.value = ''; });
+
+  // Highlight the box while a file is dragged over it.
+  zone.addEventListener('dragover', function (event) { event.preventDefault(); zone.classList.add('border-indigo-500'); });
+  zone.addEventListener('dragleave', function () { zone.classList.remove('border-indigo-500'); });
+  zone.addEventListener('drop', function (event) {
+    event.preventDefault();
+    zone.classList.remove('border-indigo-500');
+    addFiles(kind, event.dataTransfer.files, allowedExtensions);
+  });
+}
+
+// Add chosen files to the list (skipping wrong types and duplicates).
+function addFiles(kind, fileList, allowedExtensions) {
+  var skipped = 0;
+  for (var i = 0; i < fileList.length; i++) {
+    var file = fileList[i];
+    var name = file.name.toLowerCase();
+    var extension = name.substring(name.lastIndexOf('.'));
+    if (allowedExtensions.indexOf(extension) === -1) { skipped++; continue; }
+
+    var isDuplicate = false;
+    for (var j = 0; j < state[kind].length; j++) {
+      if (state[kind][j].name === file.name && state[kind][j].size === file.size) { isDuplicate = true; }
+    }
+    if (!isDuplicate) { state[kind].push(file); }
+  }
+  if (skipped > 0) { showBanner(skipped + ' file(s) skipped because of the wrong file type.', 'info'); }
+  renderFileList(kind);
+}
+
+function removeFile(kind, index) {
+  state[kind].splice(index, 1);
+  renderFileList(kind);
+}
+
+// Draw the list of chosen files under a dropzone.
+function renderFileList(kind) {
+  var html = '';
+  for (var i = 0; i < state[kind].length; i++) {
+    var file = state[kind][i];
+    var sizeKb = Math.max(1, Math.round(file.size / 1024));
+    html += '<li class="flex items-center justify-between rounded-lg border border-slate-800 bg-[#0B0F19]/70 px-3 py-2">' +
+      '<span class="truncate text-slate-200">' + esc(file.name) + ' <span class="text-xs text-slate-600">· ' + sizeKb + ' KB</span></span>' +
+      '<button data-remove-file-kind="' + kind + '" data-remove-file-index="' + i + '" class="ml-3 text-slate-500 hover:text-rose-400" title="Remove">✕</button></li>';
+  }
+  byId('list-' + kind).innerHTML = html;
+}
+
+// The big one: send everything to the server and show the results.
+async function startAnalysis() {
+  hideBanner();
+  if (state.resumes.length === 0) { showBanner('Please add at least one resume PDF.', 'error'); return; }
+  if (state.resumes.length > 2000) { showBanner('Please add at most 2,000 resumes per batch.', 'error'); return; }
+
+  // FormData is how JavaScript sends files to a server.
+  var formData = new FormData();
+  formData.append('role_key', byId('role-select').value);
+  for (var i = 0; i < state.resumes.length; i++) { formData.append('resumes', state.resumes[i]); }
+  for (var j = 0; j < state.documents.length; j++) { formData.append('documents', state.documents[j]); }
+
+  // Show the "working" state.
+  byId('analyze-btn').disabled = true;
+  byId('analyze-btn').textContent = 'Analysing ' + state.resumes.length + ' resume(s)…';
+  byId('upload-loading').classList.remove('hidden');
+  byId('upload-results').classList.add('hidden');
+
+  try {
+    var accepted = await api('/api/analyze', { method: 'POST', body: formData });
+    byId('analyze-btn').textContent = 'Queued ' + accepted.accepted_resumes + ' resume(s)…';
+    byId('upload-loading').querySelector('p').textContent = 'Task ' + accepted.task_id + ' queued — waiting for worker…';
+    var result;
+    do {
+      await new Promise(function (resolve) { window.setTimeout(resolve, 2000); });
+      result = await api(accepted.status_url);
+      if (result.status === 'failed') { throw new Error(result.error || 'The analysis worker failed this batch.'); }
+      if (result.status !== 'completed') {
+        byId('analyze-btn').textContent = 'Analysis ' + result.status + '…';
+        byId('upload-loading').querySelector('p').textContent = 'Task ' + accepted.task_id + ' · ' + result.status + '…';
+      }
+    } while (result.status !== 'completed');
+    result.errors = (accepted.errors || []).concat(result.errors || []);
+    renderUploadResults(result);
+    // Clear the file lists so the same files are not sent twice by accident.
+    state.resumes = [];
+    state.documents = [];
+    renderFileList('resumes');
+    renderFileList('documents');
+  } catch (error) {
+    showBanner(error.message, 'error');
+  } finally {
+    byId('upload-loading').classList.add('hidden');
+    byId('analyze-btn').disabled = false;
+    byId('analyze-btn').textContent = 'Run verification';
+  }
+}
+
+// Show a short result list after a batch finishes.
+function renderUploadResults(result) {
+  var html = '<h2 class="text-sm font-semibold text-slate-100 mb-3">Batch finished: ' + result.saved.length + ' analysed</h2>';
+
+  html += '<div class="space-y-2">';
+  for (var i = 0; i < result.saved.length; i++) {
+    var c = result.saved[i];
+    html += '<button data-candidate-id="' + Number(c.id) + '" class="fade-up lift w-full text-left rounded-xl border border-slate-800 bg-[#0B0F19]/70 p-3">' +
+      '<div class="flex items-center justify-between gap-2"><span class="truncate text-sm text-slate-100">' + esc(c.name) + '</span>' + verdictBadge(c.verdict) + '</div>' +
+      '<p class="mt-1 text-xs text-slate-500 tabular-nums">ATS ' + Number(c.ats) + ' · Trust ' + Number(c.trust) + ' · Fit ' + Number(c.fit) + '% · ' + Number(c.flags) + ' flag(s)</p></button>';
+  }
+  html += '</div>';
+
+  if (result.unmatched_documents.length > 0) {
+    html += '<div class="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200"><p class="font-semibold">Documents not matched to any resume:</p><ul class="mt-1 list-disc list-inside">';
+    for (var u = 0; u < result.unmatched_documents.length; u++) { html += '<li>' + esc(result.unmatched_documents[u]) + '</li>'; }
+    html += '</ul><p class="mt-1 text-amber-300/80">Tip: include the student\'s roll number or full name in the document, or name the file like the resume.</p></div>';
+  }
+
+  if (result.errors.length > 0) {
+    html += '<div class="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200"><p class="font-semibold">Problems:</p><ul class="mt-1 list-disc list-inside">';
+    for (var e = 0; e < result.errors.length; e++) { html += '<li>' + esc(result.errors[e].filename) + ': ' + esc(result.errors[e].error) + '</li>'; }
+    html += '</ul></div>';
+  }
+
+  html += '<button data-show-view="pool" class="mt-4 w-full rounded-lg border border-slate-700 py-2 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors">Open the Talent Pool →</button>';
+
+  byId('upload-results').innerHTML = html;
+  byId('upload-results').classList.remove('hidden');
+}
+
+
+// ==========================================================================
+// TALENT POOL VIEW - filters, table, CSV export
+// ==========================================================================
+
+// Build the "?role_key=...&min_trust=..." part of the URL from the filter boxes.
+function filterQuery() {
+  var params = new URLSearchParams();
+  if (byId('f-search').value.trim()) { params.set('search', byId('f-search').value.trim()); }
+  if (byId('f-role').value) { params.set('role_key', byId('f-role').value); }
+  if (byId('f-verdict').value) { params.set('verdict', byId('f-verdict').value); }
+  if (byId('f-doc').value) { params.set('doc_status', byId('f-doc').value); }
+  if (Number(byId('f-trust').value) > 0) { params.set('min_trust', byId('f-trust').value); }
+  return params.toString();
+}
+
+// Wait 300 ms after the last keystroke before reloading (so we do not reload on every letter).
+function debouncedLoadPool() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadPool, 300);
+}
+
+async function loadPool() {
+  try {
+    var rows = await api('/api/candidates?' + filterQuery());
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var c = rows[i];
+      var deleteButton = '';
+      if (state.isOfficer) {
+        deleteButton = '<button data-delete-candidate="' + Number(c.id) + '" class="ml-2 text-slate-600 hover:text-rose-400" title="Delete">🗑</button>';
+      }
+      html += '<tr class="cursor-pointer hover:bg-slate-800/40 transition-colors" data-candidate-id="' + Number(c.id) + '">' +
+        '<td class="py-3 pl-5 pr-3"><p class="text-slate-100">' + esc(c.name) + '</p><p class="text-xs text-slate-500">' + esc(c.email) + '</p></td>' +
+        '<td class="py-3 pr-3 text-slate-400">' + esc(c.role_label) + '</td>' +
+        '<td class="py-3 pr-3">' + scoreCell(c.ats) + '</td>' +
+        '<td class="py-3 pr-3">' + scoreCell(c.trust) + '</td>' +
+        '<td class="py-3 pr-3">' + scoreCell(c.fit) + '</td>' +
+        '<td class="py-3 pr-3 tabular-nums ' + (c.high_flags > 0 ? 'text-rose-400' : 'text-slate-400') + '">' + Number(c.flags) + (c.high_flags > 0 ? ' (' + Number(c.high_flags) + ' high)' : '') + '</td>' +
+        '<td class="py-3 pr-3">' + docBadge(c.doc_status) + '</td>' +
+        '<td class="py-3 pr-5 whitespace-nowrap">' + verdictBadge(c.verdict) + deleteButton + '</td></tr>';
+    }
+    byId('pool-body').innerHTML = html;
+    byId('pool-empty').classList.toggle('hidden', rows.length > 0);
+    byId('pool-count').textContent = rows.length + ' candidate(s) shown. The CSV export contains exactly these rows.';
+  } catch (error) {
+    showBanner(error.message, 'error');
+  }
+}
+
+// Download the CSV. The browser simply opens the export URL with the same filters.
+function exportCsv() {
+  window.location.href = '/api/export.csv?' + filterQuery();
+}
+
+async function deleteCandidate(id) {
+  if (!confirm('Delete this candidate permanently?')) { return; }
+  try {
+    await api('/api/candidates/' + id, { method: 'DELETE' });
+    closeDrawer();
+    loadPool();
+    showBanner('Candidate deleted.', 'success');
+  } catch (error) {
+    showBanner(error.message, 'error');
+  }
+}
+
+
+// ==========================================================================
+// DIGILOCKER VIEW - one row per candidate who has documents
+// ==========================================================================
+
+function simStatusBadge(status) {
+  var labels = { sim_pass: 'Simulated check passed', sim_review: 'Needs manual review', sim_fail: 'Simulated check failed' };
+  var classes = {
+    sim_pass:   'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    sim_review: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    sim_fail:   'border-rose-500/30 bg-rose-500/10 text-rose-300'
+  };
+  return '<span class="inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ' + (classes[status] || '') + '">' + esc(labels[status] || status) + '</span>';
+}
+
+async function loadDocsView() {
+  try {
+    var rows = await api('/api/candidates');
+    var html = '';
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].doc_status === 'none') { continue; }   // skip candidates with no documents
+      shown++;
+      var c = rows[i];
+      // The summary has no document details, so fetch the full report for this row.
+      var report = await api('/api/candidates/' + Number(c.id));
+      var names = '';
+      var sims = '';
+      for (var d = 0; d < report.documents.length; d++) {
+        names += '<p class="text-slate-300 truncate">' + esc(report.documents[d].filename) + '</p>';
+        sims += '<div class="mb-1">' + simStatusBadge(report.documents[d].digilocker.status) +
+          ' <span class="font-mono text-[11px] text-slate-500">' + esc(report.documents[d].digilocker.reference_id) + '</span></div>';
+      }
+      html += '<tr class="cursor-pointer hover:bg-slate-800/40 transition-colors" data-candidate-id="' + Number(c.id) + '">' +
+        '<td class="py-3 pl-5 pr-3 align-top"><p class="text-slate-100">' + esc(c.name) + '</p><p class="text-xs text-slate-500">' + esc(c.role_label) + '</p></td>' +
+        '<td class="py-3 pr-3 align-top">' + names + '</td>' +
+        '<td class="py-3 pr-3 align-top">' + docBadge(c.doc_status) + '</td>' +
+        '<td class="py-3 pr-5 align-top">' + sims + '</td></tr>';
+    }
+    byId('docs-body').innerHTML = html;
+    byId('docs-empty').classList.toggle('hidden', shown > 0);
+  } catch (error) {
+    showBanner(error.message, 'error');
+  }
+}
+
+
+// ==========================================================================
+// THE DRAWER - full scorecard for one candidate
+// ==========================================================================
+
+function openDrawer(id) {
+  byId('drawer-body').innerHTML = '<div class="space-y-3"><div class="skeleton h-8 w-1/2"></div><div class="skeleton h-32 w-full"></div><div class="skeleton h-48 w-full"></div></div>';
+  byId('overlay').classList.add('open');
+  byId('drawer').classList.add('open');
+
+  api('/api/candidates/' + Number(id))
+    .then(function (report) { byId('drawer-body').innerHTML = renderReport(report); })
+    .catch(function (error) { byId('drawer-body').innerHTML = '<p class="text-sm text-rose-300">' + esc(error.message) + '</p>'; });
+}
+
+function closeDrawer() {
+  byId('overlay').classList.remove('open');
+  byId('drawer').classList.remove('open');
+}
+
+// Pressing the Escape key closes the drawer.
+document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { closeDrawer(); } });
+
+// A white-ish card used for every section inside the drawer.
+function section(title, bodyHtml) {
+  return '<div class="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">' +
+    '<h3 class="text-sm font-semibold text-slate-100 mb-3">' + title + '</h3>' + bodyHtml + '</div>';
+}
+
+// Turn one report (JSON from the server) into the HTML of the whole drawer.
+function renderReport(r) {
+  var html = '';
+
+  // ---- Header ----
+  html += '<div class="flex flex-wrap items-start justify-between gap-3">' +
+    '<div><h2 class="text-xl font-semibold text-slate-50">' + esc(r.name) + '</h2>' +
+    '<p class="text-sm text-slate-400">' + esc(r.email || 'No email found') + (r.phone ? ' · ' + esc(r.phone) : '') + '</p>' +
+    '<p class="text-xs text-slate-500 mt-1">' + esc(r.role_label) + ' · ' + esc(r.filename) + '</p></div>' +
+    verdictBadge(r.verdict) + '</div>';
+
+  // ---- Scorecard: the four headline numbers ----
+  var highFlags = 0;
+  for (var f = 0; f < r.flags.length; f++) { if (r.flags[f].severity === 'high') { highFlags++; } }
+  html += section('Scorecard',
+    '<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 items-start">' +
+      ring(r.scores.ats, 'ATS score') + ring(r.scores.trust, 'Trust score') + ring(r.scores.fit, 'Role fit %') +
+      '<div class="flex flex-col items-center"><div class="h-24 w-24 flex items-center justify-center"><span class="text-4xl font-semibold tabular-nums ' + (r.flags.length ? (highFlags ? 'text-rose-400' : 'text-amber-400') : 'text-emerald-400') + '">' + r.flags.length + '</span></div>' +
+      '<p class="mt-2 text-xs uppercase tracking-wider text-slate-400">Flags</p></div>' +
+    '</div>' +
+    '<p class="mt-4 text-sm leading-relaxed text-slate-300">' + esc(r.summary) + '</p>' +
+    '<p class="mt-2 text-xs font-mono text-slate-600">' + (r.mode === 'rules+ai' ? 'Rules + AI summary' : 'Rule-based analysis') + '</p>');
+
+  // ---- Candidate details found in the resume ----
+  html += section('Details found in the resume',
+    '<dl class="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">' +
+      '<div><dt class="text-xs text-slate-500">University</dt><dd class="text-slate-200">' + esc(r.university || '–') + '</dd></div>' +
+      '<div><dt class="text-xs text-slate-500">CGPA</dt><dd class="text-slate-200">' + esc(r.cgpa === null ? '–' : r.cgpa) + '</dd></div>' +
+      '<div><dt class="text-xs text-slate-500">Roll number</dt><dd class="text-slate-200 font-mono">' + esc(r.roll_number || '–') + '</dd></div>' +
+      '<div><dt class="text-xs text-slate-500">Graduation year</dt><dd class="text-slate-200">' + esc(r.grad_year || '–') + '</dd></div>' +
+    '</dl>');
+
+  // ---- Flags ----
+  var flagHtml = '';
+  if (r.flags.length === 0) {
+    flagHtml = '<p class="flex items-center gap-2 text-sm text-emerald-400">✔ No exaggerations or inconsistencies detected.</p>';
+  } else {
+    var flagStyles = {
+      high:   'border-rose-500/30 bg-rose-500/10 text-rose-100',
+      medium: 'border-amber-500/25 bg-amber-500/5 text-amber-100',
+      low:    'border-slate-700 bg-slate-800/40 text-slate-300'
+    };
+    flagHtml = '<ul class="space-y-2">';
+    for (var i = 0; i < r.flags.length; i++) {
+      var flag = r.flags[i];
+      var tags = '<span class="mr-2 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-black/30">' + esc(flag.severity) + '</span>';
+      if (flag.kind === 'fit') { tags += '<span class="mr-2 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider bg-indigo-500/20 text-indigo-200">role fit</span>'; }
+      if (flag.source === 'ai') { tags += '<span class="mr-2 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider bg-violet-500/20 text-violet-200">AI</span>'; }
+      flagHtml += '<li class="rounded-lg border px-3 py-2.5 text-sm ' + (flagStyles[flag.severity] || flagStyles.low) + '">' + tags + esc(flag.text) + '</li>';
+    }
+    flagHtml += '</ul>';
+  }
+  html += section('Fraud &amp; inflation flags', flagHtml);
+
+  // ---- ATS breakdown ----
+  var atsHtml = '<div class="space-y-3">';
+  for (var b = 0; b < r.ats_breakdown.length; b++) {
+    var part = r.ats_breakdown[b];
+    var percent = Math.round(part.points * 100 / part.max);
+    atsHtml += '<div><div class="flex justify-between text-sm mb-1"><span class="text-slate-300">' + esc(part.label) + '</span><span class="text-slate-500 tabular-nums">' + Number(part.points) + ' / ' + Number(part.max) + '</span></div>' +
+      '<div class="h-1.5 rounded-full bg-slate-800"><div class="h-1.5 rounded-full bg-indigo-500" style="width:' + percent + '%"></div></div></div>';
+  }
+  atsHtml += '</div>';
+  html += section('ATS score breakdown', atsHtml);
+
+  // ---- Skills vs evidence ----
+  var skillHtml = '';
+  if (r.skills.length === 0) {
+    skillHtml = '<p class="text-sm text-slate-500">No role-related skills were found on the resume.</p>';
+  } else {
+    var skillIcons = {
+      verified:   '<span class="text-emerald-400">✔</span>',
+      partial:    '<span class="text-amber-400">~</span>',
+      unverified: '<span class="text-slate-500">✕</span>'
+    };
+    skillHtml = '<div class="divide-y divide-slate-800/80">';
+    for (var s = 0; s < r.skills.length; s++) {
+      var skill = r.skills[s];
+      skillHtml += '<div class="flex gap-3 py-2.5 text-sm"><span class="w-4 text-center">' + (skillIcons[skill.status] || '') + '</span>' +
+        '<div class="min-w-0"><span class="font-medium text-slate-100">' + esc(skill.skill) + '</span> <span class="text-[10px] uppercase tracking-wider text-slate-500">' + esc(skill.status) + '</span>' +
+        '<p class="text-slate-500">' + esc(skill.evidence) + '</p></div></div>';
+    }
+    skillHtml += '</div>';
+  }
+  html += section('Claimed skills vs evidence', skillHtml);
+
+  // ---- Footprint: GitHub (tech) or certificates + LinkedIn (non-tech) ----
+  html += renderFootprint(r);
+
+  // ---- Documents + simulated DigiLocker ----
+  html += renderDocuments(r);
+
+  // ---- Delete button (officers only) ----
+  if (state.isOfficer) {
+    html += '<button data-delete-candidate="' + Number(r.id) + '" class="w-full rounded-lg border border-rose-500/30 py-2 text-xs text-rose-300 hover:bg-rose-500/10 transition-colors">Delete this candidate</button>';
+  }
+  return html;
+}
+
+// The "footprint" card changes depending on the role type.
+function renderFootprint(r) {
+  var body = '';
+
+  if (r.role_kind === 'tech') {
+    var g = r.github;
+    if (!g.checked) {
+      body = '<p class="text-sm text-slate-500">No GitHub link was found on this resume.</p>';
+    } else {
+      body += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center mb-4">';
+      var tiles = [['Repos', g.total_repos], ['Original', g.original_repos], ['Forks', g.fork_repos], ['Active (12 mo)', g.recent_repos]];
+      for (var t = 0; t < tiles.length; t++) {
+        body += '<div class="rounded-xl border border-slate-800 bg-[#0B0F19]/60 p-3"><p class="text-xl font-semibold text-slate-100 tabular-nums">' + Number(tiles[t][1]) + '</p><p class="text-[11px] uppercase tracking-wider text-slate-500">' + tiles[t][0] + '</p></div>';
+      }
+      body += '</div>';
+
+      for (var p = 0; p < g.profiles.length; p++) {
+        var profile = g.profiles[p];
+        body += '<p class="text-sm text-slate-300 mb-1">Profile <a class="text-indigo-400 hover:text-indigo-300" target="_blank" rel="noopener noreferrer" href="' + safeUrl(profile.url) + '">' + esc(profile.username) + '</a>' +
+          ' · ' + Number(profile.public_repos) + ' public repos · ' + Number(profile.followers) + ' followers' +
+          (profile.account_age_days !== null && profile.account_age_days !== undefined ? ' · account ' + Number(profile.account_age_days) + ' days old' : '') + '</p>';
+      }
+
+      if (g.repos.length > 0) {
+        body += '<div class="mt-3 divide-y divide-slate-800/80">';
+        for (var q = 0; q < g.repos.length && q < 8; q++) {
+          var repo = g.repos[q];
+          body += '<div class="flex items-center justify-between gap-3 py-2 text-sm"><div class="min-w-0"><a target="_blank" rel="noopener noreferrer" class="text-slate-100 hover:text-indigo-300 truncate block" href="' + safeUrl(repo.url) + '">' + esc(repo.name) + '</a>' +
+            '<p class="text-xs text-slate-500 truncate">' + esc(repo.description || 'No description') + '</p></div>' +
+            '<div class="shrink-0 text-xs text-slate-400 text-right">' + esc(repo.language || '–') + ' · ★ ' + Number(repo.stars) +
+            (repo.is_fork ? ' · <span class="text-amber-400">fork</span>' : '') +
+            (repo.commits_sampled ? ' · ' + Number(repo.commits_sampled) + ' commits' : '') + '</div></div>';
+        }
+        body += '</div>';
+      }
+      for (var e = 0; e < g.errors.length; e++) {
+        body += '<p class="mt-2 text-xs text-amber-300">⚠ ' + esc(g.errors[e]) + '</p>';
+      }
+    }
+  } else {
+    // Non-tech role
+    body += '<p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Certificates found</p>';
+    if (r.certificates.length === 0) {
+      body += '<p class="text-sm text-slate-500">No certificates found on the resume.</p>';
+    } else {
+      body += '<ul class="space-y-1.5 text-sm text-slate-300">';
+      for (var c = 0; c < r.certificates.length; c++) { body += '<li>• ' + esc(r.certificates[c]) + '</li>'; }
+      body += '</ul>';
+    }
+    body += '<p class="text-xs uppercase tracking-wider text-slate-500 mt-4 mb-2">LinkedIn</p>';
+    if (r.links.linkedin.length === 0) {
+      body += '<p class="text-sm text-slate-500">No LinkedIn link found.</p>';
+    } else {
+      for (var l = 0; l < r.links.linkedin.length; l++) {
+        body += '<a class="block text-sm text-indigo-400 hover:text-indigo-300" target="_blank" rel="noopener noreferrer" href="' + safeUrl(r.links.linkedin[l]) + '">' + esc(r.links.linkedin[l]) + '</a>';
+      }
+    }
+    body += '<p class="mt-3 rounded-lg border border-slate-800 bg-[#0B0F19]/60 p-3 text-xs text-slate-500">' + esc(r.linkedin_note) + '</p>';
+  }
+
+  return section(r.role_kind === 'tech' ? 'GitHub footprint' : 'Professional footprint', body);
+}
+
+// The documents card, including the Simulated DigiLocker module.
+function renderDocuments(r) {
+  var body = '';
+  if (r.documents.length === 0) {
+    body = '<p class="text-sm text-slate-500">No marksheet or ID document was uploaded for this candidate.</p>';
+    return section('Document verification', body);
+  }
+
+  var resultStyles = {
+    match:     '<span class="text-emerald-400">✔ match</span>',
+    mismatch:  '<span class="text-rose-400">✕ mismatch</span>',
+    not_found: '<span class="text-slate-500">– not found</span>'
+  };
+
+  for (var d = 0; d < r.documents.length; d++) {
+    var doc = r.documents[d];
+    var dl = doc.digilocker;
+
+    body += '<div class="' + (d > 0 ? 'mt-5 pt-5 border-t border-slate-800' : '') + '">' +
+      '<div class="flex items-center justify-between gap-3 mb-3"><p class="text-sm font-medium text-slate-100 truncate">' + esc(doc.filename) + '</p>' + docBadge(doc.status) + '</div>';
+
+    if (doc.ocr_note) {
+      body += '<p class="mb-3 text-xs text-amber-300">⚠ ' + esc(doc.ocr_note) + '</p>';
+    }
+
+    // Comparison table: resume vs document
+    if (doc.checks.length > 0) {
+      body += '<table class="w-full text-sm mb-4"><thead class="text-left text-xs uppercase tracking-wider text-slate-500"><tr>' +
+        '<th class="py-1.5 pr-3 font-medium">Field</th><th class="py-1.5 pr-3 font-medium">Resume says</th><th class="py-1.5 pr-3 font-medium">Document says</th><th class="py-1.5 font-medium">Result</th></tr></thead><tbody class="divide-y divide-slate-800/70">';
+      for (var c = 0; c < doc.checks.length; c++) {
+        var check = doc.checks[c];
+        body += '<tr><td class="py-2 pr-3 text-slate-300">' + esc(check.field) + '</td><td class="py-2 pr-3 text-slate-400">' + esc(check.resume) + '</td><td class="py-2 pr-3 text-slate-400">' + esc(check.document) + '</td><td class="py-2">' + (resultStyles[check.result] || esc(check.result)) + '</td></tr>';
+      }
+      body += '</tbody></table>';
+    }
+
+    // The Simulated DigiLocker module
+    var moduleColour = { sim_pass: 'border-emerald-500/30', sim_review: 'border-amber-500/30', sim_fail: 'border-rose-500/30' };
+    body += '<div class="rounded-xl border ' + (moduleColour[dl.status] || 'border-slate-700') + ' bg-[#0B0F19]/60 p-4">' +
+      '<div class="flex flex-wrap items-center justify-between gap-2 mb-2">' +
+        '<div class="flex items-center gap-2"><span class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300">Simulated</span>' +
+        '<span class="text-sm font-semibold text-slate-100">DigiLocker / Govt ID Authenticator</span></div>' + simStatusBadge(dl.status) + '</div>' +
+      '<p class="text-sm text-slate-300">' + esc(dl.message) + '</p>' +
+      '<p class="mt-1 text-xs text-slate-500 font-mono">Reference: ' + esc(dl.reference_id) + '</p>' +
+      '<ul class="mt-3 grid sm:grid-cols-2 gap-x-4 gap-y-1 text-xs">';
+    for (var m = 0; m < dl.markers.length; m++) {
+      body += '<li class="' + (dl.markers[m].present ? 'text-slate-300' : 'text-slate-600') + '">' + (dl.markers[m].present ? '✔' : '○') + ' ' + esc(dl.markers[m].marker) + '</li>';
+    }
+    body += '</ul><p class="mt-3 text-[11px] leading-relaxed text-amber-200/70">' + esc(dl.disclaimer) + '</p></div></div>';
+  }
+  return section('Document verification', body);
+}
+
+
+// ==========================================================================
+// START UP - runs once when the page opens
+// ==========================================================================
+document.addEventListener('click', function (event) {
+  if (!(event.target instanceof Element)) { return; }
+  var target = event.target.closest('[data-delete-candidate], [data-remove-file-kind], [data-candidate-id], [data-show-view], [data-action]');
+  if (!target) { return; }
+
+  if (target.hasAttribute('data-delete-candidate')) {
+    deleteCandidate(Number(target.getAttribute('data-delete-candidate')));
+  } else if (target.hasAttribute('data-remove-file-kind')) {
+    removeFile(
+      target.getAttribute('data-remove-file-kind'),
+      Number(target.getAttribute('data-remove-file-index'))
+    );
+  } else if (target.hasAttribute('data-candidate-id')) {
+    openDrawer(Number(target.getAttribute('data-candidate-id')));
+  } else if (target.hasAttribute('data-show-view')) {
+    showView(target.getAttribute('data-show-view'), target);
+  } else {
+    var action = target.getAttribute('data-action');
+    if (action === 'analyze') { startAnalysis(); }
+    if (action === 'export-csv') { exportCsv(); }
+    if (action === 'close-drawer') { closeDrawer(); }
+  }
+});
+
+document.addEventListener('change', function (event) {
+  if (!(event.target instanceof Element)) { return; }
+  var action = event.target.getAttribute('data-change-action');
+  if (action === 'role-hint') { updateRoleHint(); }
+  if (action === 'load-pool') { loadPool(); }
+});
+
+document.addEventListener('input', function (event) {
+  if (!(event.target instanceof Element)) { return; }
+  var action = event.target.getAttribute('data-input-action');
+  if (action === 'search') { debouncedLoadPool(); }
+  if (action === 'trust') {
+    byId('f-trust-label').textContent = event.target.value;
+    debouncedLoadPool();
+  }
+});
+
+setupDropzone('resumes', ['.pdf']);
+setupDropzone('documents', ['.pdf', '.png', '.jpg', '.jpeg']);
+
+// Wire up every navigation button (sidebar + phone bar).
+var navButtons = document.querySelectorAll('.nav-btn');
+for (var n = 0; n < navButtons.length; n++) {
+  navButtons[n].addEventListener('click', function (event) {
+    showView(event.currentTarget.getAttribute('data-view'), event.currentTarget);
+  });
+}
+
+loadRoles()
+  .then(function () { showView('overview'); })
+  .catch(function (error) { showBanner(error.message, 'error'); showView('overview'); });
+</script>
+</body>
+</html>

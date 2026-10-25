@@ -1,0 +1,57 @@
+# Python environments and generated files
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+.secrets/
+*.secret
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+*-credentials.json
+service-account*.json
+secrets.json
+
+# Local databases and application data
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+instance/
+uploads/
+
+# Logs and generated build/test output
+*.log
+logs/
+build/
+dist/
+coverage/
+htmlcov/
+
+# Local assistant configuration
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
