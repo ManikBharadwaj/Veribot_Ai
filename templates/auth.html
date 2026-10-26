@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token }}">
-    <title>VeriBot AI · Secure Authentication</title>
+    <title>VeriBot AI · Enterprise Authentication</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,27 +46,29 @@
         body {
             background-color: #080A0F;
             background-image:
-                radial-gradient(ellipse at 50% 0%, rgba(37, 99, 235, 0.12), transparent 42%),
+                radial-gradient(ellipse at 50% 0%, rgba(37, 99, 235, 0.15), transparent 50%),
                 radial-gradient(#1e293b 1px, transparent 1px);
             background-size: auto, 24px 24px;
             color-scheme: dark;
         }
         .glass-card {
-            background: rgba(18, 21, 30, 0.7);
+            background: rgba(18, 21, 30, 0.75);
             backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 32px 100px rgba(0, 0, 0, 0.48);
+            box-shadow: 0 32px 100px rgba(0, 0, 0, 0.6);
         }
-        .auth-shell { animation: fadeInUp .8s var(--motion-ease) both; }
-        .auth-heading { animation: fadeInUp .7s var(--motion-ease) 100ms both; }
-        .auth-form > div:nth-of-type(1) { animation: fadeInUp .55s var(--motion-ease) 160ms both; }
-        .auth-form > div:nth-of-type(2) { animation: fadeInUp .55s var(--motion-ease) 220ms both; }
-        .auth-form > div:nth-of-type(3) { animation: fadeInUp .55s var(--motion-ease) 280ms both; }
-        .auth-form > div:nth-of-type(4) { animation: fadeInUp .55s var(--motion-ease) 340ms both; }
-        .auth-form > button { animation: fadeInUp .55s var(--motion-ease) 400ms backwards; }
+        .auth-shell { animation: fadeInUp .7s var(--motion-ease) both; }
+        .auth-heading { animation: fadeInUp .6s var(--motion-ease) 100ms both; }
+        .auth-form > div { animation: fadeInUp .5s var(--motion-ease) both; }
+        .auth-form > div:nth-of-type(1) { animation-delay: 150ms; }
+        .auth-form > div:nth-of-type(2) { animation-delay: 200ms; }
+        .auth-form > div:nth-of-type(3) { animation-delay: 250ms; }
+        .auth-form > div:nth-of-type(4) { animation-delay: 300ms; }
+        .auth-form > button { animation: fadeInUp .5s var(--motion-ease) 350ms backwards; }
+        
         button, a, input, select { transition-timing-function: var(--motion-ease) !important; }
-        button { transform-origin: center; }
-        button:active { transform: scale(.97); }
+        button:active { transform: scale(.98); }
         button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
             outline: 2px solid rgba(59, 130, 246, .75);
             outline-offset: 3px;
@@ -93,112 +95,101 @@
         }
         .primary-cta:hover { background-position: right center; }
         .primary-cta:hover::after { opacity: 1; animation: buttonShimmer .8s var(--motion-ease) both; }
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after {
-                scroll-behavior: auto !important;
-                animation-duration: .01ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: .01ms !important;
-            }
-        }
         .input-glow:focus {
-            box-shadow: 0 0 15px rgba(37, 99, 235, 0.15);
-            border-color: rgba(37, 99, 235, 0.5);
+            box-shadow: 0 0 20px rgba(37, 99, 235, 0.2);
+            border-color: rgba(59, 130, 246, 0.6);
         }
         * { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
-        *::-webkit-scrollbar { width: 8px; }
-        *::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
-        *::-webkit-scrollbar-track { background: transparent; }
     </style>
 </head>
-<body class="font-sans text-slate-300 antialiased min-h-screen flex items-center justify-center px-4">
+<body class="font-sans text-slate-300 antialiased min-h-screen flex items-center justify-center px-4 py-8">
+
     <div class="auth-shell max-w-md w-full glass-card rounded-3xl p-8 md:p-10 shadow-2xl relative overflow-hidden">
-        <!-- Decoration -->
-        <div class="absolute -top-24 -right-24 w-48 h-48 bg-blue-600/10 rounded-full blur-3xl"></div>
-        <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-indigo-600/10 rounded-full blur-3xl"></div>
+        <!-- Ambient Glowing Aura Orbs -->
+        <div class="absolute -top-24 -right-24 w-52 h-52 bg-blue-600/15 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -bottom-24 -left-24 w-52 h-52 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none"></div>
 
         <div class="relative z-10">
-            <div class="auth-heading text-center mb-10">
+            <!-- Header Section -->
+            <div class="auth-heading text-center mb-8">
                 <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 mb-4">
-                    <div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                    <span class="text-[10px] font-mono uppercase tracking-[0.2em] text-blue-400 font-bold">Enterprise Access</span>
+                    <div class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></div>
+                    <span class="text-[10px] font-mono uppercase tracking-[0.2em] text-blue-400 font-bold">Enterprise Portal</span>
                 </div>
-                <h1 class="text-4xl font-extrabold text-white tracking-tight mb-2">
+                <h1 class="text-3xl font-extrabold text-white tracking-tight mb-2">
                     VeriBot <span class="text-blue-500">AI</span>
                 </h1>
-                <p class="text-slate-400 text-sm font-medium">Next-gen talent verification engine</p>
+                <p class="text-slate-400 text-xs font-medium">Talent Verification &amp; ATS Workspace</p>
             </div>
 
+            <!-- Server Error Banner -->
             {% if error %}
-            <div class="mb-6 bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-2xl text-sm flex items-center gap-3">
-                <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                {{ error }}
+            <div class="mb-6 bg-rose-500/10 border border-rose-500/20 text-rose-300 px-4 py-3 rounded-2xl text-xs font-medium flex items-center gap-3">
+                <svg class="w-4 h-4 shrink-0 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>{{ error }}</span>
             </div>
             {% endif %}
 
+            <!-- Registration Form -->
             {% if mode == 'register' %}
-            <form action="/register" method="POST" class="auth-form space-y-5">
+            <form action="/register" method="POST" class="auth-form space-y-4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div>
-                    <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-2 ml-1">Full Name</label>
-                    <input type="text" name="name" value="{{ name }}" required
-                           placeholder="Enter your name"
-                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 ml-1">Full Name</label>
+                    <input type="text" name="name" value="{{ name }}" required placeholder="e.g. Manik Sharma"
+                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
                 </div>
                 <div>
-                    <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-2 ml-1">Work Email</label>
-                    <input type="email" name="email" value="{{ email }}" required
-                           placeholder="name@company.com"
-                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 ml-1">Work Email</label>
+                    <input type="email" name="email" value="{{ email }}" required placeholder="name@company.com"
+                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
                 </div>
                 <div>
-                    <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-2 ml-1">Password</label>
-                    <input type="password" name="password" required
-                           placeholder="Min 8 characters"
-                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 ml-1">Password</label>
+                    <input type="password" name="password" required placeholder="Minimum 8 characters"
+                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
                 </div>
                 <div>
-                    <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-2 ml-1">Account Role</label>
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 ml-1">Account Role</label>
                     <div class="relative">
-                        <select name="role" class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white appearance-none focus:outline-none transition-all input-glow">
-                            <option value="officer">Placement Officer</option>
-                            <option value="recruiter">Recruiter</option>
+                        <select name="role" class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white appearance-none focus:outline-none transition-all input-glow">
+                            <option value="officer" class="bg-[#12151E] text-white">Placement Officer</option>
+                            <option value="recruiter" class="bg-[#12151E] text-white">Recruiter</option>
                         </select>
-                        <div class="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+                        <div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                         </div>
                     </div>
                 </div>
-                <button type="submit" class="primary-cta w-full mt-2 text-white font-bold py-4 rounded-2xl text-sm shadow-[0_0_20px_rgba(37,99,235,0.2)] hover:shadow-[0_0_30px_rgba(37,99,235,0.4)]">
-                    Get Started
+                <button type="submit" class="primary-cta w-full mt-2 text-white font-bold py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(37,99,235,0.25)] hover:shadow-[0_0_30px_rgba(37,99,235,0.45)]">
+                    Create Account
                 </button>
             </form>
-            <p class="text-center text-xs text-slate-500 mt-8 font-medium">
-                Already part of the fleet? <a href="/login" class="text-blue-400 hover:text-blue-300 font-bold transition-colors">Log in here</a>
+            <p class="text-center text-xs text-slate-500 mt-6 font-medium">
+                Already registered? <a href="/login" class="text-blue-400 hover:text-blue-300 font-bold transition-colors">Sign in here</a>
             </p>
+
+            <!-- Login Form -->
             {% else %}
-            <form action="/login" method="POST" class="auth-form space-y-6">
+            <form action="/login" method="POST" class="auth-form space-y-5">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div>
-                    <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-2 ml-1">Work Email</label>
-                    <input type="email" name="email" value="{{ email }}" required
-                           placeholder="name@company.com"
-                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5 ml-1">Work Email</label>
+                    <input type="email" name="email" value="{{ email }}" required placeholder="name@company.com"
+                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
                 </div>
                 <div>
-                    <div class="flex items-center justify-between mb-2 ml-1">
-                        <label class="block text-[11px] font-bold uppercase tracking-widest text-slate-500">Password</label>
-                        <a href="#" class="text-[10px] font-bold text-blue-500/70 hover:text-blue-400 uppercase tracking-wider">Forgot?</a>
+                    <div class="flex items-center justify-between mb-1.5 ml-1">
+                        <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-400">Password</label>
                     </div>
-                    <input type="password" name="password" required
-                           placeholder="Enter your password"
-                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
+                    <input type="password" name="password" required placeholder="Enter your password"
+                           class="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none transition-all input-glow">
                 </div>
-                <button type="submit" class="primary-cta w-full mt-2 text-white font-bold py-4 rounded-2xl text-sm shadow-[0_0_20px_rgba(37,99,235,0.2)] hover:shadow-[0_0_30px_rgba(37,99,235,0.4)]">
+                <button type="submit" class="primary-cta w-full mt-2 text-white font-bold py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(37,99,235,0.25)] hover:shadow-[0_0_30px_rgba(37,99,235,0.45)]">
                     Sign In
                 </button>
             </form>
-            <div class="mt-8 pt-8 border-t border-white/[0.05]">
+            <div class="mt-6 pt-6 border-t border-white/10">
                 <p class="text-center text-xs text-slate-500 font-medium">
                     New to the platform? <a href="/register" class="text-blue-400 hover:text-blue-300 font-bold transition-colors">Create Enterprise Account</a>
                 </p>
@@ -206,5 +197,6 @@
             {% endif %}
         </div>
     </div>
+
 </body>
 </html>
