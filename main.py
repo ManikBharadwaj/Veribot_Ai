@@ -603,12 +603,21 @@ def api_roles(user: User = Depends(require_user)):
     return agent.list_roles()
 
 
+def resolve_role_key(value) -> str:
+    """Resolve a known role key or displayed role label to its canonical key."""
+    candidate = str(value or "").strip().casefold()
+    for role_key, role in agent.ROLE_PROFILES.items():
+        if candidate in {role_key.casefold(), role["label"].strip().casefold()}:
+            return role_key
+    return ""
+
+
 @app.post("/api/verify", dependencies=[Depends(require_csrf)])
 async def api_verify(request: Request, user: User = Depends(require_user)):
     """Run one authenticated, non-queued verification for text or a PDF."""
     form = await request.form(max_files=1, max_fields=4)
-    role_key = str(form.get("role_key") or "sde")
-    if role_key not in {role["key"] for role in agent.list_roles()}:
+    role_key = resolve_role_key(form.get("role_key") or "sde")
+    if not role_key:
         raise HTTPException(status_code=400, detail="Unknown job role.")
 
     upload = form.get("file")
@@ -642,7 +651,7 @@ async def api_analyze(request: Request, user: User = Depends(require_user)):
     The browser sends: a role, several resume PDFs and (optionally) marksheets / IDs.
     """
     form = await request.form(max_files=MAX_RESUMES_PER_BATCH + MAX_DOCUMENTS_PER_BATCH + 2, max_fields=50)
-    role_key = form.get("role_key", "")
+    role_key = resolve_role_key(form.get("role_key", ""))
     resumes = form.getlist("resumes")
     documents = form.getlist("documents")
     resumes = [item for item in resumes if isinstance(item, StarletteUploadFile)]
@@ -651,7 +660,7 @@ async def api_analyze(request: Request, user: User = Depends(require_user)):
         raise HTTPException(status_code=400, detail="Please upload at most " + str(MAX_RESUMES_PER_BATCH) + " resumes at a time.")
     if documents and len(documents) > MAX_DOCUMENTS_PER_BATCH:
         raise HTTPException(status_code=400, detail="Please upload at most " + str(MAX_DOCUMENTS_PER_BATCH) + " documents at a time.")
-    if role_key not in {role["key"] for role in agent.list_roles()}:
+    if not role_key:
         raise HTTPException(status_code=400, detail="Unknown job role.")
 
     if queue_worker.redis_client is None:

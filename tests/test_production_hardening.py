@@ -209,6 +209,14 @@ def test_startup_validation_rejects_weak_secret_and_missing_production_database(
         main.validate_startup_configuration()
 
 
+def test_role_selection_resolves_all_supported_keys_and_display_labels():
+    for role in agent.list_roles():
+        assert main.resolve_role_key(role["key"]) == role["key"]
+        assert main.resolve_role_key(role["label"]) == role["key"]
+        assert main.resolve_role_key("  " + role["label"].upper() + "  ") == role["key"]
+    assert main.resolve_role_key("unknown role") == ""
+
+
 def test_github_profile_api_is_mockable_and_analyzed(monkeypatch):
     monkeypatch.setattr(queue_worker, "redis_client", None)
     calls = []
@@ -857,7 +865,7 @@ def test_analyze_endpoint_queues_upload_without_running_analysis(monkeypatch, tm
             data={
                 "csrf_token": csrf,
                 "name": "Queue User",
-                "email": "queue-user@example.test",
+                "email": "queue-" + uuid.uuid4().hex + "@example.test",
                 "password": "passphrase-123",
                 "role": "officer",
             },
@@ -869,19 +877,25 @@ def test_analyze_endpoint_queues_upload_without_running_analysis(monkeypatch, tm
         assert "onchange=" not in dashboard.text
         assert "oninput=" not in dashboard.text
         csrf = re.search(r'<meta name="csrf-token" content="([^"]+)"', dashboard.text).group(1)
-        response = client.post(
-            "/api/analyze",
-            data={"role_key": "sde"},
-            files=[("resumes", ("resume.pdf", b"%PDF-1.4\nupload", "application/pdf"))],
-            headers={"X-CSRF-Token": csrf},
-        )
-        assert response.status_code == 200
-        accepted = response.json()
-        assert accepted["status"] == "queued"
-        assert accepted["accepted_resumes"] == 1
-        assert fake_redis.lists[queue_worker.QUEUE_KEY] == [accepted["task_id"]]
+        accepted_jobs = []
+        for role in agent.list_roles():
+            response = client.post(
+                "/api/analyze",
+                data={"role_key": role["label"]},
+                files=[("resumes", ("resume.pdf", b"%PDF-1.4\nupload", "application/pdf"))],
+                headers={"X-CSRF-Token": csrf},
+            )
+            assert response.status_code == 200, (role, response.text)
+            accepted = response.json()
+            assert accepted["status"] == "queued"
+            assert accepted["accepted_resumes"] == 1
+            accepted_jobs.append(accepted)
 
-        status = client.get(accepted["status_url"])
+        assert fake_redis.lists[queue_worker.QUEUE_KEY] == [
+            job["task_id"] for job in accepted_jobs
+        ]
+
+        status = client.get(accepted_jobs[0]["status_url"])
         assert status.status_code == 200
         assert status.json()["status"] == "queued"
 
