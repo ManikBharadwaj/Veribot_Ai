@@ -3,9 +3,11 @@
 import json
 import logging
 import os
+import threading
 import time
 import traceback
 import contextvars
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +22,9 @@ UPLOAD_ROOT = Path(UPLOAD_DIR or Path(__file__).resolve().parent / "var" / "uplo
 QUEUE_KEY = "veribot_job_queue"
 DLQ_KEY = "veribot_job_dlq"
 JOB_TTL_SECONDS = 30 * 24 * 60 * 60
+WORKER_HEARTBEAT_KEY = "veribot_worker_heartbeat"
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 5
+WORKER_HEARTBEAT_TTL_SECONDS = 20
 
 logger = logging.getLogger("veribot.queue")
 worker_request_id = contextvars.ContextVar("worker_request_id", default="-")
@@ -106,6 +111,13 @@ def get_job_status_from_redis(job_id: str):
         raise
 
 
+def is_worker_online() -> bool:
+    """Return whether a queue worker has published a recent heartbeat."""
+    if redis_client is None:
+        return False
+    return bool(redis_client.get(WORKER_HEARTBEAT_KEY))
+
+
 def _set_status(job_id: str, status: dict) -> None:
     _set_job(job_id, status)
 
@@ -128,56 +140,121 @@ def process_job(job_id: str, job_data: dict) -> None:
     try:
         _set_status(
             job_id,
-            {"status": "processing", "correlation_id": correlation_id, "owner_id": job_data["owner_id"]},
+            {
+                "status": "processing",
+                "correlation_id": correlation_id,
+                "owner_id": job_data["owner_id"],
+                "stage": "loading_files",
+                "progress_percent": 0,
+            },
         )
         resumes = [_read_job_file(item) for item in job_data["resumes"]]
         documents = [_read_job_file(item) for item in job_data.get("documents", [])]
-        reports, errors, unmatched = agent.analyze_batch(resumes, documents, job_data["role_key"])
+        _set_status(
+            job_id,
+            {
+                "status": "processing",
+                "correlation_id": correlation_id,
+                "owner_id": job_data["owner_id"],
+                "stage": "reading_resumes",
+                "progress_percent": 0,
+            },
+        )
+        last_progress_update = time.monotonic()
+        last_progress_stage = "reading_resumes"
+
+        def publish_progress(stage, completed, total):
+            nonlocal last_progress_update, last_progress_stage
+            now = time.monotonic()
+            if (
+                completed != total
+                and stage == last_progress_stage
+                and now - last_progress_update < 0.75
+            ):
+                return
+            stage_ranges = {
+                "reading_resumes": (0, 25),
+                "reading_documents": (25, 35),
+                "scoring": (35, 95),
+            }
+            start_percent, end_percent = stage_ranges[stage]
+            stage_fraction = completed / total if total else 1
+            progress_percent = round(
+                start_percent + (end_percent - start_percent) * stage_fraction
+            )
+            _set_status(
+                job_id,
+                {
+                    "status": "processing",
+                    "correlation_id": correlation_id,
+                    "owner_id": job_data["owner_id"],
+                    "stage": stage,
+                    "stage_completed": completed,
+                    "stage_total": total,
+                    "progress_percent": progress_percent,
+                },
+            )
+            last_progress_update = now
+            last_progress_stage = stage
+
+        reports, errors, unmatched = agent.analyze_batch(
+            resumes, documents, job_data["role_key"], progress=publish_progress
+        )
+        _set_status(
+            job_id,
+            {
+                "status": "processing",
+                "correlation_id": correlation_id,
+                "owner_id": job_data["owner_id"],
+                "stage": "saving_results",
+                "progress_percent": 95,
+            },
+        )
         db = SessionLocal()
         try:
-            saved = []
+            candidate_rows = []
             for report in reports:
                 flags = report["flags"]
-                row = Candidate(
-                    owner_id=job_data["owner_id"],
-                    filename=report["filename"],
-                    name=report["name"],
-                    email=report["email"],
-                    role_key=report["role_key"],
-                    role_label=report["role_label"],
-                    ats_score=report["scores"]["ats"],
-                    trust_score=report["scores"]["trust"],
-                    fit_score=report["scores"]["fit"],
-                    flag_count=len(flags),
-                    high_flag_count=sum(flag["severity"] == "high" for flag in flags),
-                    verdict=report["verdict"],
-                    doc_status=report["doc_status"],
-                    report_json=json.dumps(report),
+                candidate_rows.append(
+                    Candidate(
+                        owner_id=job_data["owner_id"],
+                        filename=report["filename"],
+                        name=report["name"],
+                        email=report["email"],
+                        role_key=report["role_key"],
+                        role_label=report["role_label"],
+                        ats_score=report["scores"]["ats"],
+                        trust_score=report["scores"]["trust"],
+                        fit_score=report["scores"]["fit"],
+                        flag_count=len(flags),
+                        high_flag_count=sum(flag["severity"] == "high" for flag in flags),
+                        verdict=report["verdict"],
+                        doc_status=report["doc_status"],
+                        report_json=json.dumps(report),
+                    )
                 )
-                db.add(row)
-                saved.append((row, report))
+            db.add_all(candidate_rows)
+            db.flush()
+            summaries = [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "email": row.email,
+                    "filename": row.filename,
+                    "role_key": row.role_key,
+                    "role_label": row.role_label,
+                    "ats": row.ats_score,
+                    "trust": row.trust_score,
+                    "fit": row.fit_score,
+                    "flags": row.flag_count,
+                    "high_flags": row.high_flag_count,
+                    "verdict": row.verdict,
+                    "doc_status": row.doc_status,
+                    "created_at": row.created_at.isoformat() if row.created_at else "",
+                }
+                for row in candidate_rows
+            ]
             db.commit()
-            summaries = []
-            for row, _report in saved:
-                db.refresh(row)
-                summaries.append(
-                    {
-                        "id": row.id,
-                        "name": row.name,
-                        "email": row.email,
-                        "filename": row.filename,
-                        "role_key": row.role_key,
-                        "role_label": row.role_label,
-                        "ats": row.ats_score,
-                        "trust": row.trust_score,
-                        "fit": row.fit_score,
-                        "flags": row.flag_count,
-                        "high_flags": row.high_flag_count,
-                        "verdict": row.verdict,
-                        "doc_status": row.doc_status,
-                        "created_at": row.created_at.isoformat() if row.created_at else "",
-                    }
-                )
         except Exception:
             db.rollback()
             raise
@@ -189,6 +266,8 @@ def process_job(job_id: str, job_data: dict) -> None:
                 "status": "completed",
                 "correlation_id": correlation_id,
                 "owner_id": job_data["owner_id"],
+                "stage": "completed",
+                "progress_percent": 100,
                 "saved": summaries,
                 "errors": errors,
                 "unmatched_documents": unmatched,
@@ -234,39 +313,66 @@ def process_job(job_id: str, job_data: dict) -> None:
         worker_request_id.reset(request_token)
 
 
-def run_worker(poll_interval: float = 1.0) -> None:
+def run_worker(
+    poll_interval: float = 1.0, stop_event: threading.Event | None = None
+) -> None:
     """Continuously consume Redis jobs; run with ``python queue_worker.py``."""
     if redis_client is None:
         raise RuntimeError("Redis is required to run the VeriBot analysis worker.")
-    logger.info("Analysis worker started")
-    while True:
-        job_id = redis_client.lpop(QUEUE_KEY)
-        if not job_id:
-            time.sleep(poll_interval)
-            continue
-        job_id = _decode(job_id)
-        try:
-            payload = redis_client.get(f"veribot_payload:{job_id}")
-            if not payload:
-                raise ValueError(f"Queue payload missing for job {job_id}")
-            process_job(job_id, json.loads(_decode(payload)))
-            redis_client.delete(f"veribot_payload:{job_id}")
-        except Exception as error:
-            logger.exception("Worker could not process job %s", job_id)
+    if stop_event is None:
+        stop_event = threading.Event()
+    redis_client.ping()
+    worker_id = str(uuid.uuid4())
+
+    def publish_heartbeat():
+        while not stop_event.is_set():
             try:
-                current = get_job_status_from_redis(job_id) or {}
-                if current.get("status") != "failed":
-                    failure = {
-                        "job_id": job_id,
-                        "error": str(error),
-                        "traceback": traceback.format_exc(),
-                        "failed_at": time.time(),
-                    }
-                    redis_client.rpush(DLQ_KEY, json.dumps(failure))
-                    current.update({"status": "failed", "error": str(error)})
-                    _set_status(job_id, current)
+                redis_client.set(
+                    WORKER_HEARTBEAT_KEY,
+                    json.dumps({"worker_id": worker_id, "seen_at": time.time()}),
+                    ex=WORKER_HEARTBEAT_TTL_SECONDS,
+                )
             except Exception:
-                logger.exception("Could not persist worker failure for job %s", job_id)
+                logger.exception("Could not publish analysis worker heartbeat")
+            stop_event.wait(WORKER_HEARTBEAT_INTERVAL_SECONDS)
+
+    heartbeat_thread = threading.Thread(
+        target=publish_heartbeat, name="veribot-worker-heartbeat", daemon=True
+    )
+    heartbeat_thread.start()
+    logger.info("Analysis worker started", extra={"correlation_id": worker_id})
+    try:
+        while not stop_event.is_set():
+            job_id = redis_client.lpop(QUEUE_KEY)
+            if not job_id:
+                stop_event.wait(poll_interval)
+                continue
+            job_id = _decode(job_id)
+            try:
+                payload = redis_client.get(f"veribot_payload:{job_id}")
+                if not payload:
+                    raise ValueError(f"Queue payload missing for job {job_id}")
+                process_job(job_id, json.loads(_decode(payload)))
+                redis_client.delete(f"veribot_payload:{job_id}")
+            except Exception as error:
+                logger.exception("Worker could not process job %s", job_id)
+                try:
+                    current = get_job_status_from_redis(job_id) or {}
+                    if current.get("status") != "failed":
+                        failure = {
+                            "job_id": job_id,
+                            "error": str(error),
+                            "traceback": traceback.format_exc(),
+                            "failed_at": time.time(),
+                        }
+                        redis_client.rpush(DLQ_KEY, json.dumps(failure))
+                        current.update({"status": "failed", "error": str(error)})
+                        _set_status(job_id, current)
+                except Exception:
+                    logger.exception("Could not persist worker failure for job %s", job_id)
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=WORKER_HEARTBEAT_INTERVAL_SECONDS + 1)
 
 
 if __name__ == "__main__":

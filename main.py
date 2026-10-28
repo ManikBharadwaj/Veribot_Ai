@@ -114,11 +114,19 @@ class UploadBodyLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/api/analyze":
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or scope["path"] not in {"/api/analyze", "/api/verify"}
+        ):
             await self.app(scope, receive, send)
             return
 
-        limit = MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD
+        limit = (
+            MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD
+            if scope["path"] == "/api/analyze"
+            else MAX_FILE_BYTES + MAX_MULTIPART_OVERHEAD
+        )
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         content_length = headers.get(b"content-length")
         if content_length:
@@ -148,7 +156,7 @@ class UploadBodyLimitMiddleware:
 
     @staticmethod
     async def _reject(send):
-        body = b'{"detail":"Combined upload size exceeds the request limit."}'
+        body = b'{"detail":"Upload request exceeds the configured size limit."}'
         await send(
             {
                 "type": "http.response.start",
@@ -177,7 +185,26 @@ def validate_startup_configuration():
 @asynccontextmanager
 async def app_lifespan(_app):
     validate_startup_configuration()
-    yield
+    worker_thread = None
+    worker_stop_event = None
+    if ENVIRONMENT == "development" and queue_worker.redis_client is not None:
+        worker_stop_event = threading.Event()
+        worker_thread = threading.Thread(
+            target=queue_worker.run_worker,
+            kwargs={"stop_event": worker_stop_event},
+            name="veribot-development-queue-worker",
+            daemon=True,
+        )
+        worker_thread.start()
+        logger.info("Started the development queue worker")
+    try:
+        yield
+    finally:
+        if worker_stop_event is not None and worker_thread is not None:
+            worker_stop_event.set()
+            worker_thread.join(timeout=10)
+            if worker_thread.is_alive():
+                logger.warning("Development queue worker did not stop before the shutdown timeout.")
 
 
 app = FastAPI(title="VeriBot AI", lifespan=app_lifespan)
@@ -460,6 +487,7 @@ def logout(request: Request):
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     """Check that the API, database, and Redis dependencies are available."""
     db = None
@@ -575,6 +603,38 @@ def api_roles(user: User = Depends(require_user)):
     return agent.list_roles()
 
 
+@app.post("/api/verify", dependencies=[Depends(require_csrf)])
+async def api_verify(request: Request, user: User = Depends(require_user)):
+    """Run one authenticated, non-queued verification for text or a PDF."""
+    form = await request.form(max_files=1, max_fields=4)
+    role_key = str(form.get("role_key") or "sde")
+    if role_key not in {role["key"] for role in agent.list_roles()}:
+        raise HTTPException(status_code=400, detail="Unknown job role.")
+
+    upload = form.get("file")
+    resume_text = str(form.get("resume_text") or "")
+    if isinstance(upload, StarletteUploadFile):
+        filename = os.path.basename((upload.filename or "resume.pdf").replace("\\", "/"))
+        if os.path.splitext(filename.lower())[1] != ".pdf":
+            raise HTTPException(status_code=400, detail="Please upload a PDF resume.")
+        file_bytes = await upload.read(MAX_FILE_BYTES + 1)
+        if len(file_bytes) > MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="Resume PDF exceeds the 8 MB file limit.")
+    elif resume_text:
+        filename = "resume.txt"
+        file_bytes = resume_text.encode("utf-8")
+    else:
+        raise HTTPException(status_code=400, detail="Upload a resume PDF or provide resume text.")
+
+    try:
+        return await agent.analyze_single_candidate(filename, file_bytes, role_key)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Direct candidate verification failed")
+        raise HTTPException(status_code=500, detail="Candidate verification failed.") from error
+
+
 @app.post("/api/analyze", dependencies=[Depends(require_csrf)])
 async def api_analyze(request: Request, user: User = Depends(require_user)):
     """
@@ -647,7 +707,9 @@ def api_job_status(job_id: str, user: User = Depends(require_user)):
         raise HTTPException(status_code=503, detail="Analysis status service is unavailable.") from error
     if not status or status.get("owner_id") != user.id:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    return {key: value for key, value in status.items() if key != "owner_id"}
+    public_status = {key: value for key, value in status.items() if key != "owner_id"}
+    public_status["worker_online"] = queue_worker.is_worker_online()
+    return public_status
 
 
 def filtered_candidates(db, user, role_key, min_trust, verdict, doc_status, search):
