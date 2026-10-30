@@ -15,6 +15,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import cp_fetcher
 import httpx
 from dotenv import load_dotenv
 
@@ -183,6 +184,9 @@ def _extract_links(text: str, hyperlinks: list[str] | None = None) -> dict:
         "github_profiles": profiles,
         "github_repos": repositories,
         "linkedin": details["linkedin"],
+        "competitive_programming_profiles": cp_fetcher.extract_profile_usernames(
+            combined_text
+        ),
     }
 
 
@@ -889,7 +893,53 @@ async def score_candidate(
     fields = draft["fields"]
     links = draft["links"]
     text = draft["text"]
-    github = await analyze_github(links, _github_semaphore, _github_client)
+    if role["kind"] == "tech":
+        github = await analyze_github(links, _github_semaphore, _github_client)
+        competitive_programming = await cp_fetcher.fetch_competitive_profiles(
+            text,
+            _github_client,
+            _github_semaphore,
+            links.get("competitive_programming_profiles"),
+        )
+        technical_rating = cp_fetcher.calculate_technical_rating(
+            competitive_programming, github
+        )
+        professional_profile = None
+    else:
+        github = _empty_github_summary()
+        competitive_programming = None
+        technical_rating = None
+        professional_profile = {
+            "linkedin": {
+                "status": "link_found" if links.get("linkedin") else "not_provided",
+                "urls": links.get("linkedin", []),
+                "verification": "resume_link_only",
+                "scraped": False,
+            },
+            "resume_metrics": {
+                "experience_years": fields.get("experience_years"),
+                "education": {
+                    "university": fields.get("university"),
+                    "degree": fields.get("degree"),
+                    "graduation_year": fields.get("grad_year"),
+                },
+                "certificates": len(
+                    re.findall(
+                        r"\b(certification|certificate|certified|license)\b",
+                        text,
+                        re.I,
+                    )
+                ),
+                "role_skills_claimed": sum(
+                    _keyword_matches(keyword, text) for keyword in role["keywords"]
+                ),
+                "supporting_document_status": _document_status(document_results),
+            },
+            "note": (
+                "Professional metrics are extracted from the resume and supplied "
+                "documents. LinkedIn profile contents are not scraped."
+            ),
+        }
     matched = [
         keyword for keyword in role["keywords"] if _keyword_matches(keyword, text)
     ]
@@ -939,6 +989,10 @@ async def score_candidate(
     )
     flags.extend(_document_flags(document_results))
     claim_analysis = build_claim_analysis(role_key, role, text, fields, links, github, skills, flags)
+    if competitive_programming is not None:
+        claim_analysis["platforms"]["competitive_programming"] = (
+            competitive_programming
+        )
     doc_status = _document_status(document_results)
     doc_adjustment = {"verified": 5, "partial": -5, "mismatch": -15, "unreadable": -10, "none": 0}
     trust = max(
@@ -987,6 +1041,9 @@ async def score_candidate(
         "role_label": role["label"],
         "role_kind": role["kind"],
         "links": links,
+        "professional_profile": professional_profile,
+        "competitive_programming": competitive_programming,
+        "technical_rating": technical_rating,
         "scores": {"ats": ats, "trust": trust, "fit": fit},
         "evidence_score": evidence_score,
         "ats_breakdown": ats_breakdown,

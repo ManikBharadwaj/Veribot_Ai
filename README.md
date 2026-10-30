@@ -51,6 +51,8 @@ Create a `.env` file in the project folder and add the settings below.
 * **REDIS_URL** or **UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN**: required for asynchronous uploads, status polling, rate limiting, OCR/GitHub caches, and health checks.
 * **VERIBOT_UPLOAD_DIR**: private scratch storage shared by the API and worker instances. Keep it on a persistent, access-restricted shared volume when API and worker run on different hosts.
 * **GITHUB_TOKEN** (recommended): without it GitHub allows only 60 requests/hour, which a big batch will use up. Create a token with *no scopes* at GitHub → Settings → Developer settings → Personal access tokens.
+* **CP_SCRAPE_TIMEOUT** (optional): per-request timeout in seconds for public LeetCode, CodeChef, and HackerRank requests. The value is constrained to 10–12 seconds; defaults to `11`.
+* **USER_AGENT_HEADER** (optional): User-Agent header value sent by the competitive-programming profile fetcher. Defaults to `VeriBotAI/1.0 (public profile verification)`.
 * **LLM_API_KEY / LLM_BASE_URL / LLM_MODEL** (optional): turns on an AI-written summary and up to 3 extra flags. Leave empty to run rules-only.
 * **TESSERACT_CMD** (Windows only, if Tesseract is not found): e.g. `C:\Program Files\Tesseract-OCR\tesseract.exe`
 
@@ -70,9 +72,16 @@ The upload endpoint accepts up to 2,000 resumes and 2,000 supporting documents, 
 ### Candidate evidence report
 Each candidate is evaluated for the role selected for the batch. The stored `report_json` retains resume field extraction, role scores, a skill evidence matrix, flags, supporting-document checks, and an `investigation` object with claim checks and human-readable findings. The optional LLM review receives role/skill summaries and aggregate GitHub metrics only; raw resume text, names, email addresses, usernames, and repository URLs are not sent. Its findings are advisory and cannot change deterministic scores. The full report is available through the existing `GET /api/candidates/{candidate_id}` endpoint. A single-candidate `/api/verify` endpoint is also available to authenticated clients.
 
-For extracted GitHub links, the analyzer fetches public profile totals and samples up to 30 recently pushed public repositories per profile, then checks language breakdowns and up to 100 recent commits for at most three repositories per profile. Repository reports include sampled commit counts, counts attributed to the candidate's linked GitHub username, first/latest sampled commit dates, and up to eight short commit-message samples. These are bounded samples, not lifetime contribution totals; GitHub only attributes commits when its API associates a commit with a user account. GitHub API data only represents accessible public activity. Upstash caching reduces repeated fetches, but unique profiles still consume GitHub API quota.
+Role selection determines which profile evidence is fetched:
 
-LinkedIn links are recorded but profile contents are not scraped. LinkedIn profile verification requires appropriate authorized API access/OAuth. Large batches can take longer than 10–15 seconds: PDF/OCR work, GitHub request quotas, network latency, and optional AI calls make that latency impossible to guarantee for thousands of unique resumes.
+* **SDE and IT/technical roles** run the existing GitHub audit and look for LeetCode, CodeChef, and HackerRank profile URLs in the resume. LeetCode data includes global ranking, reputation, easy/medium/hard solved counts, contest rating/percentile/badges, and submission-calendar activity/streak summaries. CodeChef data includes global/country ranks, star/current/highest rating, division, solved count, and visible contest participation. HackerRank data includes profile level/followers/submissions, badge totals, and Problem Solving, Python, SQL, C++, and Java badge stars when returned by its public endpoints. A supplementary technical rating is calculated from available GitHub, contest, solved-problem, and domain-star metrics, normalized over the available components; it is separate from the ATS, trust, and role-fit scores.
+* **Management and other non-technical roles** skip GitHub and competitive-programming requests. Their professional summary uses resume-extracted LinkedIn links, experience, education, certificates, role keywords, and any supplied supporting-document result.
+
+All competitive-programming requests use asynchronous per-request timeouts constrained to 10–12 seconds and return explicit unavailable/empty metrics when a profile is private, missing, or an endpoint is unavailable. These third-party public endpoints and page layouts can change; values are observable profile snapshots, not independently verified credentials.
+
+LinkedIn links are recorded, but profile contents are not scraped. LinkedIn verification requires appropriate authorized API access/OAuth; the dashboard labels a URL as a resume-provided link, not a verified profile. Large batches can take longer than 10–15 seconds: PDF/OCR work, GitHub quotas, profile-service latency, and optional AI calls make that latency impossible to guarantee for thousands of unique resumes.
+
+For extracted GitHub links, the analyzer fetches public profile totals and samples up to 30 recently pushed public repositories per profile, then checks language breakdowns and up to 100 recent commits for at most three repositories per profile. Repository reports include sampled commit counts, counts attributed to the candidate's linked GitHub username, first/latest sampled commit dates, and up to eight short commit-message samples. These are bounded samples, not lifetime contribution totals; GitHub only attributes commits when its API associates a commit with a user account. GitHub API data only represents accessible public activity. Upstash caching reduces repeated fetches, but unique profiles still consume GitHub API quota.
 
 The candidate scorecard shows extracted contact and education details, the selected role's relevant skill catalog, claimed-skill evidence, resume consistency flags, and scanned repository summaries. The supported role catalog includes SDE, data science, DevOps, product management, and HR profiles.
 
@@ -106,7 +115,8 @@ Do **not** open `index.html` by double-clicking or with Live Server: it must be 
 Veribot_Ai/
 ├── main.py              # FastAPI app: pages, login, API routes, CSV export
 ├── models.py            # SQLite tables (User, Candidate) with SQLAlchemy
-├── agent.py             # The verification engine (no web code in here)
+├── agent.py             # Role-aware resume and profile evidence analysis
+├── cp_fetcher.py        # Bounded async LeetCode, CodeChef, and HackerRank fetchers
 ├── templates/
 │   ├── auth.html        # Login + register page
 │   └── index.html       # Dashboard (Tailwind + vanilla JS)
@@ -126,8 +136,9 @@ main.py   checks login → validates files (type, size, count)
 queue_worker.py  retrieves the task, analyzes it, saves reports, publishes status
   │
   ▼
-agent.py  PDF text → regex (email, CGPA, links…) → GitHub API (tech roles)
-          → OCR documents → match docs to resumes → compare fields
+agent.py  PDF text → resume fields and profile links → role-based analysis
+          ├─ technical roles: GitHub audit + cp_fetcher (LeetCode, CodeChef, HackerRank)
+          └─ non-technical roles: resume/LinkedIn-link and supporting-document analysis
           → scores + flags
   ▼
 main.py   saves each report into SQLite (models.py) and returns JSON
@@ -167,7 +178,8 @@ Open `agent.py`, find `ROLE_PROFILES`, copy an existing entry, give it a new key
 ## 5. Honest limitations (please read)
 
 * **DigiLocker is a SIMULATION.** It is not connected to the real DigiLocker or any government API. It only checks that an OCR'd document looks like an academic record and that its details match the resume. A "pass" does not prove authenticity. Real verification needs official issuer/partner APIs.
-* **LinkedIn is not fetched.** LinkedIn blocks scraping and its terms forbid it. The app only checks that a link exists and uses evidence in the resume itself.
+* **LinkedIn is not scraped.** The app records the resume URL and analyzes resume-provided professional history. A link is not proof of profile ownership or contents; external verification requires authorized LinkedIn API access/OAuth.
+* **Competitive-programming profiles are public endpoint snapshots.** Missing/private profiles and provider changes produce unavailable fields; a calculated technical rating is supplementary evidence, not a hiring decision.
 * **GitHub rate limits**: set `GITHUB_TOKEN` for batches.
 * **OCR is imperfect**: blurry scans can produce wrong names/numbers; mismatches should be reviewed by a human.
 * **Scores are decision support**, not a verdict on a person. Always review flagged candidates manually.

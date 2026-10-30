@@ -1441,6 +1441,140 @@
       return section('Repositories Scanned', html);
     }
 
+    function metricValue(value, suffix) {
+      if (value === null || value === undefined || value === '') return '–';
+      return esc(value) + (suffix || '');
+    }
+
+    function renderCompetitiveProgramming(r) {
+      var profiles = r.competitive_programming || {};
+      var leetcode = profiles.leetcode || {};
+      var lcSolved = leetcode.solved || {};
+      var lcContest = leetcode.contest || {};
+      var lcStreak = leetcode.streak || {};
+      var lcHeatmap = leetcode.heatmap || {};
+      var codechef = profiles.codechef || {};
+      var ccContests = codechef.contest_participation || {};
+      var hackerrank = profiles.hackerrank || {};
+      var domains = hackerrank.domain_badges || {};
+      var domainNames = {
+        problem_solving: 'Problem Solving',
+        python: 'Python',
+        sql: 'SQL',
+        cpp: 'C++',
+        java: 'Java'
+      };
+      var domainMetrics = [];
+      Object.keys(domainNames).forEach(function (key) {
+        var domain = domains[key] || {};
+        domainMetrics.push(
+          '<div class="flex justify-between gap-2"><dt>' + domainNames[key] +
+          '</dt><dd class="font-semibold text-slate-200">' +
+          (hackerrank.status === 'available' ? Number(domain.stars || 0) + ' star(s)' : '–') +
+          '</dd></div>'
+        );
+      });
+      function metric(label, value, suffix) {
+        return '<div class="flex justify-between gap-2"><dt class="text-slate-500">' +
+          esc(label) + '</dt><dd class="text-right font-semibold text-slate-200">' +
+          metricValue(value, suffix) + '</dd></div>';
+      }
+      function platformCard(title, profile, metrics) {
+        var status = profile.status === 'available' ? 'Public profile found' :
+          (profile.status === 'not_provided' ? 'No profile link in resume' : 'Profile data unavailable');
+        return '<article class="min-w-0 border-t border-white/10 pt-3">' +
+          '<div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">' +
+          '<h3 class="text-xs font-bold text-white">' + title + '</h3>' +
+          '<span class="text-[10px] text-slate-500">' + status + '</span></div>' +
+          '<dl class="space-y-1.5 text-[11px]">' + metrics + '</dl></article>';
+      }
+      var leetcodeMetrics =
+        metric('Global rank', leetcode.global_ranking) +
+        metric('Reputation', leetcode.reputation) +
+        metric('Solved · Easy / Medium / Hard',
+          (lcSolved.easy === null || lcSolved.easy === undefined ? '–' : lcSolved.easy) + ' / ' +
+          (lcSolved.medium === null || lcSolved.medium === undefined ? '–' : lcSolved.medium) + ' / ' +
+          (lcSolved.hard === null || lcSolved.hard === undefined ? '–' : lcSolved.hard)) +
+        metric('Total solved', lcSolved.total) +
+        metric('Contest rating', lcContest.rating) +
+        metric('Contest percentile', lcContest.global_percentile, '%') +
+        metric('Contest badge', Array.isArray(lcContest.badges) && lcContest.badges.length
+          ? lcContest.badges.join(', ') : '–') +
+        metric('Streak · current / max',
+          (lcStreak.current === null || lcStreak.current === undefined ? '–' : lcStreak.current) +
+          ' / ' + (lcStreak.maximum === null || lcStreak.maximum === undefined ? '–' : lcStreak.maximum)) +
+        metric('Heatmap · active days / submissions',
+          (lcHeatmap.active_days === null || lcHeatmap.active_days === undefined ? '–' : lcHeatmap.active_days) +
+          ' / ' + (lcHeatmap.submissions === null || lcHeatmap.submissions === undefined ? '–' : lcHeatmap.submissions)) +
+        metric('Active days · last 30', lcHeatmap.active_days_last_30);
+      function contestCount(value) {
+        return codechef.status === 'available' ? Number(value || 0) : '–';
+      }
+      var codechefMetrics =
+        metric('Global / country rank',
+          (codechef.global_rank === null || codechef.global_rank === undefined ? '–' : codechef.global_rank) +
+          ' / ' + (codechef.country_rank === null || codechef.country_rank === undefined ? '–' : codechef.country_rank)) +
+        metric('Star rating', codechef.star_rating, '★') +
+        metric('Current / highest rating',
+          (codechef.current_rating === null || codechef.current_rating === undefined ? '–' : codechef.current_rating) +
+          ' / ' + (codechef.highest_rating === null || codechef.highest_rating === undefined ? '–' : codechef.highest_rating)) +
+        metric('Division', codechef.division) +
+        metric('Problems solved', codechef.problems_solved) +
+        metric('Starters / Cook-Off',
+          contestCount(ccContests.starters) + ' / ' + contestCount(ccContests.cook_off)) +
+        metric('Lunchtime / Long Challenges',
+          contestCount(ccContests.lunchtime) + ' / ' + contestCount(ccContests.long_challenges));
+      var hackerrankMetrics =
+        metric('Level', hackerrank.level) +
+        metric('Followers', hackerrank.followers) +
+        metric('Total submissions', hackerrank.total_submissions) +
+        metric('Overall badges', hackerrank.badges_count) +
+        domainMetrics.join('');
+      var rating = r.technical_rating || {};
+      var ratingSummary = rating.score === null || rating.score === undefined
+        ? 'Not enough public metrics to calculate a rating.'
+        : 'Supplementary technical rating: ' + Number(rating.score) + ' / 100 from ' +
+          Number(rating.available_components || 0) + ' available metric group(s).';
+      return section('Competitive Programming Profiles',
+        '<p class="mb-3 text-[11px] text-slate-400">' + esc(ratingSummary) +
+        ' Public profile data may be incomplete.</p>' +
+        '<div class="grid gap-x-5 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">' +
+        platformCard('LeetCode', leetcode, leetcodeMetrics) +
+        platformCard('CodeChef', codechef, codechefMetrics) +
+        platformCard('HackerRank', hackerrank, hackerrankMetrics) +
+        '</div>');
+    }
+
+    function renderProfessionalProfile(r) {
+      var profile = r.professional_profile || {};
+      var linkedin = profile.linkedin || {};
+      var resume = profile.resume_metrics || {};
+      var education = resume.education || {};
+      var urls = Array.isArray(linkedin.urls) ? linkedin.urls :
+        (r.links && Array.isArray(r.links.linkedin) ? r.links.linkedin : []);
+      var link = urls.length
+        ? '<a href="' + safeUrl(urls[0]) +
+          '" target="_blank" rel="noopener noreferrer" class="text-blue-300 hover:text-blue-200">Open LinkedIn profile</a>'
+        : '<span class="text-slate-500">No LinkedIn URL found in the resume</span>';
+      var experience = resume.experience_years === null || resume.experience_years === undefined
+        ? '–' : Number(resume.experience_years) + ' years';
+      var html = '<dl class="grid gap-x-6 gap-y-3 text-xs sm:grid-cols-2">' +
+        '<div><dt class="text-slate-500">LinkedIn link</dt><dd class="mt-1 font-semibold">' + link + '</dd></div>' +
+        '<div><dt class="text-slate-500">Professional experience</dt><dd class="mt-1 font-semibold text-slate-200">' + esc(experience) + '</dd></div>' +
+        '<div><dt class="text-slate-500">Education</dt><dd class="mt-1 font-semibold text-slate-200">' +
+          esc([education.degree, education.university].filter(Boolean).join(' · ') || '–') + '</dd></div>' +
+        '<div><dt class="text-slate-500">Graduation year</dt><dd class="mt-1 font-semibold text-slate-200">' +
+          metricValue(education.graduation_year) + '</dd></div>' +
+        '<div><dt class="text-slate-500">Resume certificates</dt><dd class="mt-1 font-semibold text-slate-200">' +
+          Number(resume.certificates || 0) + '</dd></div>' +
+        '<div><dt class="text-slate-500">Supporting documents</dt><dd class="mt-1 font-semibold text-slate-200">' +
+          esc(resume.supporting_document_status || '–') + '</dd></div></dl>' +
+        '<p class="mt-3 text-[10px] text-slate-500">' +
+          esc(profile.note || 'Metrics are extracted from the resume; LinkedIn contents are not scraped.') +
+        '</p>';
+      return section('Professional Profile & Management Metrics', html);
+    }
+
     function renderReport(r) {
       if (!r) return '';
       var html = '';
@@ -1499,10 +1633,15 @@
           (linkItems.length ? linkItems.join('') : '<span class="text-slate-500">–</span>') + '</dd></div>' +
         '</dl>');
 
-      html += renderRelevantSkills(r);
-      html += renderClaimedSkills(r);
       html += renderInflationChecks(r);
-      html += renderRepositoryScans(r);
+      if (r.role_kind === 'tech') {
+        html += renderRelevantSkills(r);
+        html += renderClaimedSkills(r);
+        html += renderCompetitiveProgramming(r);
+        html += renderRepositoryScans(r);
+      } else {
+        html += renderProfessionalProfile(r);
+      }
 
       if (state.isOfficer) {
         html += '<button data-delete-candidate="' + Number(r.id) + '" class="w-full rounded-xl border border-rose-500/30 bg-rose-500/10 py-2.5 text-xs font-bold text-rose-300 hover:bg-rose-500/20 transition-all">Delete Candidate Record</button>';
