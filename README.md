@@ -49,6 +49,7 @@ Create a `.env` file in the project folder and add the settings below.
 * **ENVIRONMENT**: set to `production` in production. Production also requires `DATABASE_URL`.
 * **DATABASE_URL**: Supabase can be used here as the PostgreSQL database. Supabase PostgreSQL does not replace Redis; keep **REDIS_URL** or **UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN** for the job queue and cache.
 * **REDIS_URL** or **UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN**: required for asynchronous uploads, status polling, rate limiting, OCR/GitHub caches, and health checks.
+* Outbound HTTPS uses the operating system's trusted certificate store. On Windows networks that inspect HTTPS, install the organization-provided root CA in the Windows trusted root certificate store; do not disable certificate verification. The queue worker retries Redis connection failures while the API is running.
 * **VERIBOT_UPLOAD_DIR**: private scratch storage shared by the API and worker instances. Keep it on a persistent, access-restricted shared volume when API and worker run on different hosts.
 * **GITHUB_TOKEN** (recommended): without it GitHub allows only 60 requests/hour, which a big batch will use up. Create a token with *no scopes* at GitHub → Settings → Developer settings → Personal access tokens.
 * **CP_SCRAPE_TIMEOUT** (optional): per-request timeout in seconds for public LeetCode, CodeChef, and HackerRank requests. The value is constrained to 10–12 seconds; defaults to `11`.

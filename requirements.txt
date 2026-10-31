@@ -15,6 +15,7 @@ requests>=2.31
 python-dotenv>=1.0
 redis>=5.0.0
 upstash-redis>=1.0.0
+truststore>=0.10
 psycopg2-binary>=2.9.9
 pyjwt>=2.8.0
 pytest>=8.0

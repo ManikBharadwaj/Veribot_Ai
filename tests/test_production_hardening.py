@@ -1021,6 +1021,35 @@ def test_worker_heartbeat_reports_online_state(monkeypatch):
     assert queue_worker.is_worker_online() is True
 
 
+def test_worker_retries_redis_tls_connection_failure(monkeypatch):
+    class FakeRedis:
+        def __init__(self):
+            self.ping_attempts = 0
+            self.stop_event = None
+
+        def ping(self):
+            self.ping_attempts += 1
+            if self.ping_attempts == 1:
+                raise ConnectionError("certificate verification failed")
+
+        def lpop(self, _key):
+            self.stop_event.set()
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return True
+
+    fake_redis = FakeRedis()
+    stop_event = threading.Event()
+    fake_redis.stop_event = stop_event
+    monkeypatch.setattr(queue_worker, "redis_client", fake_redis)
+    monkeypatch.setattr(queue_worker, "WORKER_RECONNECT_INTERVAL_SECONDS", 0.01)
+
+    queue_worker.run_worker(poll_interval=0.01, stop_event=stop_event)
+
+    assert fake_redis.ping_attempts == 2
+
+
 def test_development_app_lifespan_starts_and_stops_queue_worker(monkeypatch):
     monkeypatch.setattr(main, "ENVIRONMENT", "development")
     monkeypatch.setattr(main, "validate_startup_configuration", lambda: None)

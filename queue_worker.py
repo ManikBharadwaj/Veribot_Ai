@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
+import tls_config
 
 load_dotenv()
 
@@ -25,6 +26,7 @@ JOB_TTL_SECONDS = 30 * 24 * 60 * 60
 WORKER_HEARTBEAT_KEY = "veribot_worker_heartbeat"
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 5
 WORKER_HEARTBEAT_TTL_SECONDS = 20
+WORKER_RECONNECT_INTERVAL_SECONDS = 5
 
 logger = logging.getLogger("veribot.queue")
 worker_request_id = contextvars.ContextVar("worker_request_id", default="-")
@@ -321,7 +323,20 @@ def run_worker(
         raise RuntimeError("Redis is required to run the VeriBot analysis worker.")
     if stop_event is None:
         stop_event = threading.Event()
-    redis_client.ping()
+    while not stop_event.is_set():
+        try:
+            redis_client.ping()
+            break
+        except Exception as error:
+            logger.warning(
+                "Redis connection failed while starting the analysis worker; retrying in "
+                "%s seconds: %s",
+                WORKER_RECONNECT_INTERVAL_SECONDS,
+                error,
+            )
+            stop_event.wait(WORKER_RECONNECT_INTERVAL_SECONDS)
+    if stop_event.is_set():
+        return
     worker_id = str(uuid.uuid4())
 
     def publish_heartbeat():
@@ -343,7 +358,12 @@ def run_worker(
     logger.info("Analysis worker started", extra={"correlation_id": worker_id})
     try:
         while not stop_event.is_set():
-            job_id = redis_client.lpop(QUEUE_KEY)
+            try:
+                job_id = redis_client.lpop(QUEUE_KEY)
+            except Exception:
+                logger.exception("Could not read the analysis queue; retrying")
+                stop_event.wait(WORKER_RECONNECT_INTERVAL_SECONDS)
+                continue
             if not job_id:
                 stop_event.wait(poll_interval)
                 continue
